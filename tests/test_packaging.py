@@ -267,6 +267,22 @@ def _make_bundle_dir(
     return bundle
 
 
+def _make_escaping_relative_link(internal: Path, secret: Path) -> Path:
+    """Внешняя относительная symlink с нативной для ОС формой цели.
+
+    Цель обязана вычисляться ``os.path.relpath`` текущей ОС: Windows
+    не разрешает reparse-цель составной относительной ссылки, записанную
+    с «/» (WinError 123 — единственный остаточный провал native source
+    CI run 39246201467), поэтому raw-строки вида ``../../../x`` в
+    фикстурах запрещены. Возвращённая ссылка до передачи в
+    ``archive_bundle`` должна разрешаться strict=True в точный
+    существующий внешний файл (контракт проверяет отдельный тест).
+    """
+    link = internal / "runtime.dat"
+    os.symlink(os.path.relpath(secret, start=internal), link)
+    return link
+
+
 def _archive_names(path: Path, target: str) -> list[str]:
     fmt = bp.load_targets()[target]["archive_format"]
     if fmt == "zip":
@@ -780,12 +796,19 @@ class PackagingTests(unittest.TestCase):
         for target, name in (("linux-x86_64", "escape"), ("windows-x86_64", "escape-win")):
             bundle = _make_bundle_dir(self.tmp / name, target=target)
             internal = bundle / "_internal"
-            os.symlink(secret, internal / "runtime.dat")  # внешняя цель
+            link = internal / "runtime.dat"
+            os.symlink(secret, link)  # внешняя абсолютная цель
+            # Предусловие: внешняя ссылка действительно разрешается
+            # strict=True в точный существующий внешний файл.
+            self.assertEqual(link.resolve(strict=True), secret.resolve(strict=True))
+            out = self.tmp / ("out-" + name)
             with self.assertRaises(bp.PackagingError) as ctx:
-                bp.archive_bundle(
-                    bundle, self.tmp / ("out-" + name), version="0.0.0-test", target=target
-                )
+                bp.archive_bundle(bundle, out, version="0.0.0-test", target=target)
             self.assertIn("_internal/runtime.dat", str(ctx.exception))
+            self.assertIn("покидает", str(ctx.exception))
+            published = list(out.rglob("*")) if out.exists() else []
+            self.assertEqual(published, [], "отказ не публикует архив/сумму")
+            self.assertEqual(secret.read_bytes(), b"SYNTHETIC_SECRET")
         dangling = _make_bundle_dir(self.tmp / "dangling")
         os.symlink("no-such-target.so", dangling / "_internal" / "runtime.dat")
         with self.assertRaises(bp.PackagingError):
@@ -793,12 +816,48 @@ class PackagingTests(unittest.TestCase):
                 dangling, self.tmp / "out-dangling", version="0.0.0-test", target="linux-x86_64"
             )
         escaping = _make_bundle_dir(self.tmp / "escaping")
-        os.symlink("../../../outside-secret", escaping / "_internal" / "runtime.dat")
+        escaping_link = _make_escaping_relative_link(escaping / "_internal", secret)
+        # Предусловие фикстуры (нативные семантики ОС) ДО проверки
+        # безопасности архива: ссылка разрешается strict=True в точный
+        # существующий внешний файл. На Windows raw-цель составной
+        # относительной ссылки с «/» падает именно здесь WinError 123
+        # (run 39246201467), а не молча доходит до валидации «битой».
+        self.assertEqual(
+            escaping_link.resolve(strict=True), secret.resolve(strict=True)
+        )
+        self.assertTrue(os.path.samefile(escaping_link, secret))
+        out_escaping = self.tmp / "out-escaping"
         with self.assertRaises(bp.PackagingError) as ctx:
             bp.archive_bundle(
-                escaping, self.tmp / "out-escaping", version="0.0.0-test", target="linux-x86_64"
+                escaping, out_escaping, version="0.0.0-test", target="linux-x86_64"
             )
         self.assertIn("покидает", str(ctx.exception))
+        self.assertIn("_internal/runtime.dat", str(ctx.exception))
+        published = list(out_escaping.rglob("*")) if out_escaping.exists() else []
+        self.assertEqual(published, [], "отказ не публикует архив/сумму")
+        self.assertEqual(secret.read_bytes(), b"SYNTHETIC_SECRET")
+
+    def test_escaping_relative_link_fixture_contract(self) -> None:
+        """Контракт фикстуры внешней относительной ссылки: нативная цель.
+
+        Причина остаточного native-провала (run 39246201467, оба
+        Windows): составная относительная reparse-цель, записанная с
+        «/», не разрешается Win32 (WinError 123). Контракт: цель
+        вычисляется os.path.relpath текущей ОС (на POSIX форма
+        совпадает с прежней raw-строкой), сохраняется в ссылке дословно
+        и разрешается strict=True в точный внешний файл вне комплекта.
+        """
+        secret = self.tmp / "contract-secret"
+        secret.write_bytes(b"CONTRACT-SECRET")
+        bundle = _make_bundle_dir(self.tmp / "contract")
+        internal = bundle / "_internal"
+        link = _make_escaping_relative_link(internal, secret)
+        self.assertEqual(os.readlink(link), os.path.relpath(secret, start=internal))
+        resolved = link.resolve(strict=True)
+        self.assertEqual(resolved, secret.resolve(strict=True))
+        self.assertTrue(os.path.samefile(link, secret))
+        with self.assertRaises(ValueError):
+            resolved.relative_to(bundle.resolve())
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "mkfifo отсутствует на этой ОС")
     def test_bundle_rejects_fifo(self) -> None:
