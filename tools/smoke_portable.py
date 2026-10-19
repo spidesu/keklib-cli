@@ -980,8 +980,22 @@ def run_smoke(archive: Path, workdir: Path) -> dict[str, object]:
     report["finished_unix"] = time.time()
     if own_workdir:
         write_report(workdir, report)
-    print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+    print(console_payload(report))
     return report
+
+
+def console_payload(report: Mapping[str, object]) -> str:
+    """JSON-строка для stdout: чистый ASCII, безопасный для узких терминалов.
+
+    ``ensure_ascii=True`` кодирует все не-ASCII символы как ``\\uXXXX``:
+    консоль нативного CI (cp1252/ascii на Windows) не умеет кириллицу
+    путей/диагностики, но ``json.loads`` вывода восстанавливает точные
+    исходные поля и Unicode-семантику значений. Кодировки окружения не
+    подменяются и UnicodeEncodeError не глотается: вывод просто не
+    содержит не-ASCII байтов. Сохранённый ``smoke-report.json``
+    остаётся UTF-8 c ``ensure_ascii=False`` (см. ``write_report``).
+    """
+    return json.dumps(report, ensure_ascii=True, indent=2, default=str)
 
 
 def write_report(workdir: Path, report: Mapping[str, object]) -> None:

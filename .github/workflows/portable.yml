@@ -188,12 +188,27 @@ jobs:
           archives=(bundle/keklib-cli-*.tar.gz bundle/keklib-cli-*.zip)
           test "${#archives[@]}" -eq 1
           python harness-src/tools/smoke_portable.py --archive "${archives[0]}" --workdir "$WORKDIR"
+      # Отчёт упавшего smoke содержит диагностику (failures/flow) и не
+      # должен теряться: копия в target-имя и upload выполняются всегда.
+      # Отказ самого smoke при этом НЕ проглатывается (никаких флагов
+      # мягкого отказа, шаг smoke остаётся обязательным): job остаётся
+      # failed, гейт с needs: smoke не запускается, failed JSON не
+      # становится verified-asset.
+      - name: Переименовать отчёт в target-имя (сохранить даже при отказе)
+        if: always()
+        shell: bash
+        env:
+          WORKDIR: ${{ runner.temp }}/keklib-smoke
+        run: |
           # Отчёт получает target-специфическое имя ДО upload: все четыре
           # smoke-job грузят файл с одинаковым basename, gate ожидает
           # smoke-report-<target>.json — без переименования артефакты
           # перезаписали бы друг друга при скачивании в один каталог.
-          cp "$WORKDIR/smoke-report.json" "smoke-report-${{ matrix.name }}.json"
+          if [ -f "$WORKDIR/smoke-report.json" ]; then
+            cp "$WORKDIR/smoke-report.json" "smoke-report-${{ matrix.name }}.json"
+          fi
       - name: Опубликовать отчёт smoke
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: smoke-report-${{ matrix.name }}

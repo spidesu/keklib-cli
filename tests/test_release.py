@@ -951,6 +951,97 @@ class UnpackChainTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Консольный JSON отчёта smoke на узких кодировках терминала
+
+
+class ConsoleJsonTests(unittest.TestCase):
+    """Печать отчёта в stdout не падает на ascii/cp1252 (нативный Windows CI).
+
+    Нативный прогон Windows упал на ``print(json.dumps(report,
+    ensure_ascii=False, ...))`` с UnicodeEncodeError в cp1252: кириллица
+    путей/диагностики непредставима в этой кодировке консоли. Требования:
+    консольный JSON — чистый ASCII (``ensure_ascii=True``; escape
+    ``\\uXXXX`` сохраняет все поля и Unicode-семантику значений, и
+    ``json.loads`` вывода восстанавливает точный исходный отчёт),
+    сохранённый ``smoke-report.json`` остаётся UTF-8 c
+    ``ensure_ascii=False``, коды выхода не меняются. Запреты: не
+    подменять кодировку окружением и не ловить UnicodeEncodeError без
+    отчёта.
+    """
+
+    REPORT: dict[str, object] = {
+        "schema_version": 1,
+        "tool": "smoke_portable",
+        "archive": "C:\\Игрок\\библиотека\\keklib-cli-0.1.0-windows-x86_64.zip",
+        "bundle_dir": "C:\\smoke\\bundle\\keklib-cli",
+        "flow": [{"step": "поиск", "title": "Мастер и Маргарита", "rc": 0}],
+        "extractions_expected": {"Мастер и Маргарита": "b" * 64},
+        "failures": ["SmokeError: шаг поиск завершился кодом 1"],
+        "passed": False,
+    }
+
+    def test_console_payload_roundtrips_narrow_encodings(self):
+        """ensure_ascii=True: ascii/cp1252 печать и точный json.loads-roundtrip."""
+        for encoding in ("ascii", "cp1252"):
+            with self.subTest(encoding=encoding):
+                raw = io.BytesIO()
+                narrow = io.TextIOWrapper(raw, encoding=encoding)
+                with contextlib.redirect_stdout(narrow):
+                    print(smoke_portable.console_payload(self.REPORT))
+                narrow.flush()
+                payload = raw.getvalue().decode(encoding)
+                self.assertTrue(
+                    payload.isascii(),
+                    "консольный JSON обязан быть чистым ASCII для узких "
+                    "кодировок терминала",
+                )
+                self.assertEqual(json.loads(payload), self.REPORT)
+
+    def test_failed_report_prints_and_exit_code_stable(self):
+        """Полный main() на cp1252-stdout: отчёт печатается, код остаётся 1.
+
+        Отсутствующий архив с кириллицей в пути — самый ранний отказ
+        smoke: отчёт не пишется на диск (workdir не создаётся), все
+        не-ASCII данные выходят только через stdout. До исправления
+        print(ensure_ascii=False) поднимал UnicodeEncodeError из main()
+        вместо честного кода 1.
+        """
+        with tempfile.TemporaryDirectory(prefix="keklib-console-json-") as tmp:
+            archive = (
+                Path(tmp) / "библиотека" / "keklib-cli-0.1.0-windows-x86_64.zip"
+            )
+            workdir = Path(tmp) / "smoke-workdir"
+            raw = io.BytesIO()
+            narrow = io.TextIOWrapper(raw, encoding="cp1252")
+            with contextlib.redirect_stdout(narrow):
+                code = smoke_portable.main(
+                    ["--archive", str(archive), "--workdir", str(workdir)]
+                )
+            narrow.flush()
+            self.assertEqual(code, 1, "код выхода упавшего smoke не меняется")
+            self.assertFalse(workdir.exists())
+            report = json.loads(raw.getvalue().decode("cp1252"))
+            self.assertIs(report["passed"], False)
+            self.assertEqual(report["archive"], str(archive.resolve()))
+            self.assertTrue(
+                any("архив не найден" in str(item) for item in report["failures"])
+            )
+
+    def test_file_report_stays_utf8_ensure_ascii_false(self):
+        """Инвариант: smoke-report.json остаётся UTF-8 без ASCII-escape."""
+        with tempfile.TemporaryDirectory(prefix="keklib-console-json-") as tmp:
+            workdir = Path(tmp)
+            smoke_portable.write_report(workdir, self.REPORT)
+            data = (workdir / "smoke-report.json").read_bytes()
+            self.assertIn("Мастер и Маргарита".encode("utf-8"), data)
+            self.assertIn("библиотека".encode("utf-8"), data)
+            self.assertNotIn(b"\\u", data)
+            self.assertEqual(
+                json.loads(data.decode("utf-8")), self.REPORT
+            )
+
+
+# ---------------------------------------------------------------------------
 # Структурные регрессии workflows (stdlib, без YAML-парсера)
 
 
@@ -1033,6 +1124,45 @@ class WorkflowStructureTests(unittest.TestCase):
         for target in _all_targets():
             self.assertIn(f"name: smoke-report-{target}", text)
             self.assertIn(f"name: keklib-cli-{target}", text)
+
+    def test_portable_smoke_failure_retains_report_without_masking(self):
+        """Отчёт упавшего smoke сохраняется артефактом, отказ не глотается.
+
+        Нативный Windows smoke упал на печати отчёта в cp1252, и отчёт с
+        диагностикой не попал в артефакты (cp выполнялся только после
+        успеха smoke). Узкое усиление: копия в target-имя и upload
+        выполняются всегда (``if: always()``) с проверкой существования
+        файла; continue-on-error в smoke-job запрещён — упавший smoke
+        оставляет job failed, гейт (needs: smoke) не запускается, failed
+        JSON не становится verified-asset.
+        """
+        text = self.PORTABLE.read_text(encoding="utf-8")
+        job = self._job_section(text, "smoke:")
+        self.assertIsNotNone(job, "smoke-job отсутствует в portable.yml")
+        assert job is not None
+        self.assertNotIn(
+            "continue-on-error", job, "отказ smoke не проглатывается"
+        )
+        run_step = job.index("tools/smoke_portable.py")
+        always_positions = [m.start() for m in re.finditer(r"if: always\(\)", job)]
+        after_run = [pos for pos in always_positions if pos > run_step]
+        self.assertEqual(
+            len(after_run),
+            2,
+            "копия и upload отчёта обязаны выполняться даже при отказе smoke",
+        )
+        retention, upload_always = after_run
+        guard = job.index('-f "$WORKDIR/smoke-report.json"', run_step)
+        copy = job.index('cp "$WORKDIR/smoke-report.json"', run_step)
+        upload_step = job.index("actions/upload-artifact", upload_always)
+        self.assertLess(
+            retention, guard, "копия отчёта — шаг if: always() с guards"
+        )
+        self.assertLess(guard, copy, "существование отчёта проверяется до копии")
+        self.assertLess(
+            copy, upload_always, "target-имя копируется до upload"
+        )
+        self.assertLess(upload_always, upload_step, "upload тоже if: always()")
 
     def test_portable_scope_input_choice_with_all_default(self):
         """Режим подготовки: input scope — choice, default all, ровно два варианта.
