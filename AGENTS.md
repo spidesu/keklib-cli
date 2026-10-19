@@ -775,7 +775,12 @@ overview-форму без журнала прогонов (правило — �
     CPython 3.11/3.14, unittest + compileall, pywinpty из lock по
     маркеру; reusable `workflow_call`) и `.github/workflows/portable.yml`
     (`workflow_dispatch`: source-tests → матрица из targets.json →
-    harness-архив → нативные build четырёх target → smoke-jobs на новых
+    harness-архив → нативные build четырёх target (linux-x86_64 —
+    закреплённым rootless-билдером packaging/builder/ через
+    tools/build_in_container.py: host Podman ставится в job'е с
+    fail-closed rootless-проверкой podman info, host CPython — только
+    оркестрация драйвера; остальные target — нативным
+    tools/build_portable.py) → smoke-jobs на новых
     машинах без checkout (только harness-артефакт и комплект) → gate по
     needs всех jobs; действия по commit SHA, permissions
     `contents: read`; публичный Release/подписи не создаются).

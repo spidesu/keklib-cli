@@ -304,6 +304,20 @@ source-tests, строит матрицу четырёх target **из targets.j
 native-target (Windows/macOS) прошли per-target приёмку в подготовительном
 режиме конвейера; полный выпускной гейт требует успешного прогона всей
 матрицы четырёх target.
+
+### Маршрут Linux в portable.yml
+
+Target `linux-x86_64` в build-job собирается **не** host-рантаймом
+runner'а (его SQLite не равен пину 3.54.1), а закреплённым
+rootless-билдером — тем же `packaging/builder/` и драйвером
+`tools/build_in_container.py --build-image --build-bundle --output dist`
+(см. раздел «Сборка linux-x86_64 в rootless-контейнере»). Для запуска на
+стандартном `ubuntu-22.04` job сам ставит host Podman с
+rootless-prerequisites (`apt-get install podman uidmap slirp4netns
+fuse-overlayfs`) и fail-closed проверяет rootless-режим реальным
+`podman info`; CPython job'а используется только как оркестрация
+драйвера. Остальные три target собираются нативным
+`tools/build_portable.py` на host runtime runner'а, как раньше.
 У `workflow_dispatch` есть режим объёма прогона (input `scope`):
 `all` (по умолчанию) — полный выпускной конвейер всех четырёх target
 с гейтом и `SHA256SUMS`; `windows-macos` — подготовительный прогон трёх

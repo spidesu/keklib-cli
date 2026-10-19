@@ -1249,6 +1249,349 @@ class WorkflowStructureTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Маршрут Linux-сборки CI через закреплённый rootless-билдер.
+#
+# Полный CI-run собрал Linux на host runtime setup-python: SQLite 3.37.2
+# != пин 3.54.1 — release-гейт честно отказал. Регрессии ниже закрепляют:
+# Linux build-job обязан использовать существующий драйвер
+# tools/build_in_container.py (packaging/builder/, пины не меняются),
+# host Python допускается только как оркестрация драйвера; rootless
+# проверяется реально (podman info) и fail-closed. Это контрактные тесты
+# извлечённых shell-веток на fake-исполняемых файлах, а не нативная
+# приёмка CI на hosted runner.
+
+
+LINUX_PODMAN_STEP = "Rootless Podman на ubuntu-22.04 (linux-x86_64)"
+LINUX_DRIVER_STEP = "Сборка linux-x86_64 в закреплённом rootless-билдере"
+
+_FAKE_SUDO = (
+    "#!/usr/bin/env bash\n"
+    '{ printf \'%s\\0\' "$@"; printf \'\\n\'; } >> "$FAKE_LOG_DIR/sudo.log"\n'
+    "exit 0\n"
+)
+_FAKE_PODMAN = (
+    "#!/usr/bin/env bash\n"
+    '{ printf \'%s\\0\' "$@"; printf \'\\n\'; } >> "$FAKE_LOG_DIR/podman.log"\n'
+    'if [ "${1:-}" = info ]; then\n'
+    '  printf \'%s\\n\' "${PODMAN_INFO_OUTPUT:-true}"\n'
+    '  exit "${PODMAN_INFO_STATUS:-0}"\n'
+    "fi\n"
+    "exit 0\n"
+)
+_FAKE_PYTHON = (
+    "#!/usr/bin/env bash\n"
+    '{ printf \'%s\\0\' "$@"; printf \'\\n\'; } >> "$FAKE_LOG_DIR/python.log"\n'
+    "exit 0\n"
+)
+
+
+def _step_block(job_text: str, step_name: str) -> str:
+    """Текст одного шага job-секции workflow: от '- name:' до следующего шага."""
+    lines = job_text.splitlines()
+    anchor = f"- name: {step_name}"
+    starts = [i for i, line in enumerate(lines) if line.strip() == anchor]
+    if len(starts) != 1:
+        raise AssertionError(f"шаг {step_name!r} встречается {len(starts)} раз, ожидался один")
+    start = starts[0]
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if re.match(r"^ {6}- ", lines[i]) or re.match(r"^ {4}\S", lines[i]):
+            end = i
+            break
+    return "\n".join(lines[start:end])
+
+
+def _step_run_script(job_text: str, step_name: str) -> str:
+    """Run-скрипт шага (inline или блок после 'run: |') — то, что выполнит runner."""
+    block = _step_block(job_text, step_name)
+    lines = block.splitlines()
+    run_lines = [i for i, line in enumerate(lines) if line.strip().startswith("run:")]
+    if len(run_lines) != 1:
+        raise AssertionError(f"у шага {step_name!r} ожидался ровно один run:")
+    run_idx = run_lines[0]
+    inline = lines[run_idx].strip()[len("run:") :].strip()
+    if inline and inline not in ("|", ">", "|-", ">-", "|+", ">+"):
+        return inline
+    base = len(lines[run_idx]) - len(lines[run_idx].lstrip())
+    script: list[str] = []
+    for line in lines[run_idx + 1 :]:
+        if not line.strip():
+            script.append("")
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= base:
+            break
+        script.append(line[base + 2 :])
+    return "\n".join(script).strip("\n")
+
+
+def _step_condition(job_text: str, step_name: str) -> str | None:
+    """Условие 'if:' шага (без префикса), None если шаг безусловный."""
+    match = re.search(r"^ {8}if: (.+)$", _step_block(job_text, step_name), flags=re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def _write_fake(bin_dir: Path, name: str, body: str) -> None:
+    path = bin_dir / name
+    path.write_text(body, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _fake_calls(log: Path) -> list[list[str]]:
+    """Вызовы fake-исполняемого: по одному списку argv на строку лога."""
+    if not log.exists():
+        return []
+    calls = []
+    for line in log.read_text(encoding="utf-8").splitlines():
+        argv = [item for item in line.split("\0") if item]
+        if argv:
+            calls.append(argv)
+    return calls
+
+
+class LinuxCiBuilderRouteTests(unittest.TestCase):
+    """Контракт маршрута linux-x86_64 в build-job portable.yml (fake-executables)."""
+
+    PORTABLE = WorkflowStructureTests.PORTABLE
+
+    def _build_job(self) -> str:
+        text = self.PORTABLE.read_text(encoding="utf-8")
+        job = WorkflowStructureTests._job_section(text, "build:")
+        self.assertIsNotNone(job, "build-job отсутствует в portable.yml")
+        assert job is not None
+        return job
+
+    def _execute(
+        self,
+        script: str,
+        *,
+        bin_dir: Path,
+        cwd: Path,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Исполнить извлечённый shell-фрагмент с fake-исполняемыми в PATH."""
+        env = dict(os.environ)
+        env["PATH"] = os.pathsep.join([str(bin_dir), env.get("PATH", "")])
+        env["FAKE_LOG_DIR"] = str(cwd)
+        env.pop("PODMAN_INFO_OUTPUT", None)
+        env.pop("PODMAN_INFO_STATUS", None)
+        if extra_env:
+            env.update(extra_env)
+        return subprocess.run(
+            ["bash", "-c", script],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def test_linux_build_runs_existing_driver_with_both_flags(self):
+        """Linux-сборка — существующий драйвер билдера, не второй рецепт.
+
+        Точный argv проверяется исполнением извлечённой строки с fake
+        ``python``: оба флага ``--build-image``/``--build-bundle``, вывод
+        ``--output dist``. ``--all`` запрещён: он создаёт smoke-фикстуру
+        в каталоге вывода, а upload обязан нести только архив+sidecar
+        (полный изолированный smoke — отдельный обязательный job).
+        """
+        job = self._build_job()
+        script = _step_run_script(job, LINUX_DRIVER_STEP)
+        self.assertEqual(
+            _step_condition(job, LINUX_DRIVER_STEP), "matrix.name == 'linux-x86_64'"
+        )
+        with tempfile.TemporaryDirectory(prefix="keklib-ci-route-") as tmp:
+            case = Path(tmp)
+            bin_dir = case / "bin"
+            bin_dir.mkdir()
+            _write_fake(bin_dir, "python", _FAKE_PYTHON)
+            result = self._execute(script, bin_dir=bin_dir, cwd=case)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = _fake_calls(case / "python.log")
+            self.assertEqual(len(calls), 1, "ожидался ровно один вызов python")
+            argv = calls[0]
+            self.assertEqual(
+                argv,
+                [
+                    "tools/build_in_container.py",
+                    "--build-image",
+                    "--build-bundle",
+                    "--output",
+                    "dist",
+                ],
+            )
+            self.assertNotIn("--all", argv)
+            self.assertNotIn("--smoke", argv)
+            self.assertNotIn("--write-fixture", argv)
+
+    def test_native_build_steps_restricted_to_non_linux(self):
+        """Нативные setup-python шаги build_portable ограничены non-Linux.
+
+        Host runtime runner'а (SQLite 3.37.2) не равен пину 3.54.1 — на
+        Linux эти шаги обязаны быть выключены условием matrix.name.
+        """
+        job = self._build_job()
+        for name in (
+            "Сборочные зависимости (точные пины с хешами)",
+            "Установка проекта (src-layout) в окружение job'а",
+            "Сборка portable со всеми fail-closed гейтами",
+        ):
+            self.assertEqual(
+                _step_condition(job, name),
+                "matrix.name != 'linux-x86_64'",
+                msg=name,
+            )
+        # build_portable вызывается ровно один раз и только в non-Linux ветке
+        self.assertEqual(job.count("build_portable.py"), 1)
+        self.assertIn(
+            "build_portable.py",
+            _step_block(job, "Сборка portable со всеми fail-closed гейтами"),
+        )
+
+    def test_rootless_podman_step_fails_closed(self):
+        """Rootless-проверка реальна (podman info) и fail-closed, без rootful.
+
+        Извлечённый скрипт исполняется с fake ``sudo``/``podman``: сначала
+        установка host-Podman prerequisites через apt-get, затем реальный
+        запрос ``podman info``; rootless=false или отказ самого podman
+        обязаны валить шаг. ``sudo`` никогда не оборачивает ``podman``.
+        """
+        job = self._build_job()
+        script = _step_run_script(job, LINUX_PODMAN_STEP)
+        self.assertEqual(
+            _step_condition(job, LINUX_PODMAN_STEP), "matrix.name == 'linux-x86_64'"
+        )
+        active = [
+            line.strip()
+            for line in script.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        self.assertTrue(
+            any("podman info" in line for line in active),
+            "проверка rootless — реальный вызов podman info, не комментарий",
+        )
+        self.assertTrue(
+            any(line.startswith("test") and "true" in line for line in active),
+            "результат podman info сверяется со строкой true",
+        )
+        self.assertLess(
+            script.index("apt-get install"),
+            script.index("podman info"),
+            "host-Prerequisites ставятся до rootless-проверки",
+        )
+
+        def run_case(extra_env: dict[str, str] | None = None):
+            case = Path(tempfile.mkdtemp(prefix="keklib-ci-podman-"))
+            self.addCleanup(shutil.rmtree, case, ignore_errors=True)
+            bin_dir = case / "bin"
+            bin_dir.mkdir()
+            _write_fake(bin_dir, "sudo", _FAKE_SUDO)
+            _write_fake(bin_dir, "podman", _FAKE_PODMAN)
+            result = self._execute(
+                script, bin_dir=bin_dir, cwd=case, extra_env=extra_env
+            )
+            return result, case
+
+        # Успех: rootless=true
+        result, case = run_case()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        sudo_calls = _fake_calls(case / "sudo.log")
+        self.assertEqual(sudo_calls[0][:2], ["apt-get", "update"])
+        install = sudo_calls[1]
+        self.assertEqual(install[:2], ["apt-get", "install"])
+        self.assertIn("podman", install, "устанавливается сам host Podman")
+        podman_calls = _fake_calls(case / "podman.log")
+        self.assertEqual(podman_calls[0][0], "info")
+        for call in sudo_calls:
+            self.assertNotEqual(call[0], "podman", "sudo podman (rootful) запрещён")
+
+        # Fail-closed: rootless=false — шаг обязан упасть
+        result, _ = run_case({"PODMAN_INFO_OUTPUT": "false"})
+        self.assertNotEqual(result.returncode, 0, "rootless=false не может проходить")
+
+        # Fail-closed: сам podman info сломан — шаг обязан упасть
+        result, _ = run_case({"PODMAN_INFO_STATUS": "1"})
+        self.assertNotEqual(result.returncode, 0, "отказ podman info не может проходить")
+
+    def test_build_job_without_privileged_or_security_weakening(self):
+        """Никаких привилегированных режимов и ослабления security ради fake-pass.
+
+        Проверяется исполняемый/структурный текст job'а без строк-комментариев:
+        комментарий может декларировать запрет, но не может его включить.
+        """
+        job = self._build_job()
+        active = "\n".join(
+            line for line in job.splitlines() if not line.strip().startswith("#")
+        )
+        for forbidden in (
+            "--privileged",
+            "--cap-add",
+            "security-opt",
+            "seccomp",
+            "/var/run/docker.sock",
+            "sudo podman",
+        ):
+            self.assertNotIn(forbidden, active)
+
+    def test_dist_upload_unconditional_for_both_routes(self):
+        """Upload dist безусловен: обе ветки публикуют один и тот же артефакт."""
+        job = self._build_job()
+        self.assertIsNone(_step_condition(job, "Опубликовать архив комплекта"))
+        self.assertIn("path: dist", _step_block(job, "Опубликовать архив комплекта"))
+
+    def test_linux_route_step_order(self):
+        """Порядок: checkout → CPython → rootless Podman → драйвер билдера → upload."""
+        job = self._build_job()
+        checkout = job.index("- name: Checkout")
+        cpython = job.index("- name: CPython 3.14.8")
+        podman_step = job.index(f"- name: {LINUX_PODMAN_STEP}")
+        driver_step = job.index(f"- name: {LINUX_DRIVER_STEP}")
+        upload = job.index("- name: Опубликовать архив комплекта")
+        self.assertLess(checkout, cpython)
+        self.assertLess(cpython, podman_step)
+        self.assertLess(podman_step, driver_step)
+        self.assertLess(driver_step, upload)
+
+    def test_ci_routes_keep_pinned_sqlite(self):
+        """Подключение билдера к CI пины не меняет: Linux 3.54.1 == рецепту
+        билдера, native-target — принятые 3.50.4.
+
+        Смена любого пина — осознанное решение с правкой этого теста
+        (release-гейт сверяет пин с фактическим runtime каждой сборки).
+        """
+        toolchain = json.loads(
+            (REPO_ROOT / "packaging" / "toolchain.json").read_text(encoding="utf-8")
+        )["targets"]
+        builder = json.loads(
+            (REPO_ROOT / "packaging" / "builder" / "builder-pins.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(toolchain["linux-x86_64"]["sqlite"], "3.54.1")
+        self.assertEqual(
+            builder["sources"]["sqlite"]["version"],
+            toolchain["linux-x86_64"]["sqlite"],
+            "пин Linux обязан совпадать с рецептом билдера, который его строит",
+        )
+        for target in ("windows-x86_64", "macos-x86_64", "macos-arm64"):
+            self.assertEqual(toolchain[target]["sqlite"], "3.50.4", target)
+
+    def test_smoke_and_gate_not_weakened_by_linux_route(self):
+        """Изолированный smoke без checkout и выпускной гейт не задеты маршрутом."""
+        text = self.PORTABLE.read_text(encoding="utf-8")
+        smoke = WorkflowStructureTests._job_section(text, "smoke:")
+        self.assertIsNotNone(smoke)
+        assert smoke is not None
+        self.assertNotIn("actions/checkout", smoke, "smoke остаётся без checkout")
+        self.assertNotIn("build_in_container", smoke)
+        gate = WorkflowStructureTests._job_section(text, "gate:")
+        self.assertIsNotNone(gate)
+        assert gate is not None
+        self.assertNotIn("apt-get", gate)
+        self.assertNotIn("build_in_container", gate)
+
+
+# ---------------------------------------------------------------------------
 # Windows-ветка permissions: argv и cwd icacls (синтетика, не native NTFS)
 
 

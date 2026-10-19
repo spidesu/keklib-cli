@@ -15,7 +15,13 @@
 # CI-артефакты (и SHA256SUMS после успеха гейта в режиме all).
 #
 # SQLite-пины всех target заполнены в packaging/toolchain.json фактами
-# инвентаризации; native_build_verified=true только у linux-x86_64.
+# инвентаризации (linux-x86_64 — 3.54.1 в rootless-билдере; Windows/macOS —
+# 3.50.4 нативной инвентаризацией); per-target native_build_verified — это
+# приёмка одного target на его сборочной ОС, а не выпускной гейт полной
+# матрицы. linux-x86_64 собирается закреплённым rootless-билдером
+# (packaging/builder/, драйвер tools/build_in_container.py) — host runtime
+# runner'а используется только как оркестрация драйвера; остальные target —
+# нативным tools/build_portable.py на host runtime.
 # Никаких fake-pass: сборка любого target падает при нарушении гейтов.
 
 name: portable-release
@@ -122,7 +128,10 @@ jobs:
           name: smoke-harness
           path: dist-harness/keklib-smoke-harness.zip
 
-  # 4. Нативная сборка каждого target на своей ОС/CPU (кросс-сборка запрещена).
+  # 4. Нативная сборка каждого target на своей ОС/CPU (кросс-сборка запрещена):
+  #    linux-x86_64 — в закреплённом rootless-контейнере билдера (host runtime
+  #    runner'а SQLite 3.37.2 != пин 3.54.1 и builder'ом быть не может),
+  #    остальные три target — нативным tools/build_portable.py на host runtime.
   build:
     needs: [source-tests, matrix]
     strategy:
@@ -133,16 +142,42 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Для linux-x86_64 этот же CPython — только оркестрация драйвера
+      # rootless-билдера; runtime комплекта собирается внутри закреплённого
+      # образа. Для остальных target он является builder runtime.
       - name: CPython 3.14.8 (закреплённый toolchain)
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14.8"
       - name: Сборочные зависимости (точные пины с хешами)
+        if: matrix.name != 'linux-x86_64'
         run: python -m pip install -r packaging/requirements-build.lock
       - name: Установка проекта (src-layout) в окружение job'а
+        if: matrix.name != 'linux-x86_64'
         run: python -m pip install .
       - name: Сборка portable со всеми fail-closed гейтами
+        if: matrix.name != 'linux-x86_64'
         run: python tools/build_portable.py --target ${{ matrix.name }} --output dist
+      # Linux-baseline: ставим host Podman с rootless-prerequisites и fail-closed
+      # проверяем rootless-режим реальным podman info (не комментарием).
+      # sudo допустим только здесь и только для apt-get установки host-Podman
+      # prerequisites; никакого sudo podman / --privileged / монтирования
+      # сокетов и домашнего каталога хоста.
+      - name: Rootless Podman на ubuntu-22.04 (linux-x86_64)
+        if: matrix.name == 'linux-x86_64'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
+          rootless="$(podman info --format '{{.Host.Security.Rootless}}')"
+          test "$rootless" = "true"
+      # Существующий закреплённый билдер: packaging/builder/ (digest образа,
+      # исходники CPython/SQLite с хешами) + штатный конвейер гейтов внутри.
+      # Без --all: smoke-фикстура не должна попасть в dist (upload — только
+      # архив+sidecar; полный изолированный smoke — отдельный job ниже).
+      - name: Сборка linux-x86_64 в закреплённом rootless-билдере
+        if: matrix.name == 'linux-x86_64'
+        run: python tools/build_in_container.py --build-image --build-bundle --output dist
       - name: Опубликовать архив комплекта
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
