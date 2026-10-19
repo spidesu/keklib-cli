@@ -1284,72 +1284,6 @@ _FAKE_PYTHON = (
     "exit 0\n"
 )
 
-#: Синтетический «WSL bash» — эмуляция наблюдённого на run 39305339493
-#: поведения PATH-разрешения ``bash`` в System32-лаунчер WSL: uname
-#: отвечает Linux, исполнение скрипта — сигнатурный отказ rc=1 с ПУСТЫМ
-#: stderr и сообщением в stdout. Shebang — абсолютный настоящий bash
-#: (подставляется в рантайме): «env bash» зациклил бы PATH-поиск на самом
-#: фейке. Контрактная эмуляция, не native Windows.
-_WSL_FAKE_TEMPLATE = (
-    "#!__REAL_BASH__\n"
-    "case \"$2\" in\n"
-    "  'uname -s') echo 'Linux'; exit 0 ;;\n"
-    "esac\n"
-    "echo 'Windows Subsystem for Linux has no installed distributions.'\n"
-    "exit 1\n"
-)
-
-#: Синтетический «Git Bash» (MINGW-подобный): пробы discovery (uname) и
-#: конвертации (cygpath -u) отвечаются эмуляцией MINGW; исполнение самого
-#: скрипта делегируется настоящему bash тестового хоста. Как настоящий
-#: Git Bash ставит свои каталоги перед Windows-PATH, фейк ставит вперёд
-#: собственный «usr/bin»-каталог с РАБОЧИМ bash (иначе shebang
-#: ``env bash`` стабов попадал бы в «WSL bash» из PATH); в каталоге только
-#: bash, чтобы не затенять fake-исполняемые теста. Без bash-4-измов
-#: (macOS bash 3.2 — тоже тестовый хост).
-_GIT_FAKE_TEMPLATE = (
-    "#!__REAL_BASH__\n"
-    "export PATH=\"__GIT_USR_BIN__:$PATH\"\n"
-    "case \"$2\" in\n"
-    "  'uname -s')\n"
-    "    echo 'MINGW64_NT-10.0-19045'\n"
-    "    exit 0\n"
-    "    ;;\n"
-    "  'cygpath -u -- \"$1\"')\n"
-    "    value=\"$4\"\n"
-    "    case \"$value\" in\n"
-    "      /*) printf '%s\\n' \"$value\"; exit 0 ;;\n"
-    "      [A-Za-z]:*)\n"
-    "        posix=$(printf '%s' \"$value\" | tr '\\\\' '/')\n"
-    "        drive=$(printf '%s' \"${posix%%:*}\" | tr 'A-Z' 'a-z')\n"
-    "        rest=\"${posix#*:}\"\n"
-    "        printf '/%s%s\\n' \"$drive\" \"$rest\"\n"
-    "        exit 0\n"
-    "        ;;\n"
-    "    esac\n"
-    "    exit 9\n"
-    "    ;;\n"
-    "esac\n"
-    "exec __REAL_BASH__ \"$@\"\n"
-)
-
-
-def _real_bash() -> str:
-    """Абсолютный путь настоящего bash тестового хоста (shebang синтетики)."""
-    return shutil.which("bash") or "/bin/bash"
-
-
-def _render_fake(template: str, *, git_usr_bin: Path | None = None) -> str:
-    """Подставить реальный bash (и его собственный «usr/bin») в шаблон."""
-    real = _real_bash()
-    body = template.replace("__REAL_BASH__", real).replace(
-        "__REAL_BASH_BIN_DIR__", str(Path(real).parent)
-    )
-    if git_usr_bin is not None:
-        body = body.replace("__GIT_USR_BIN__", str(git_usr_bin))
-    return body
-
-
 _BASH_CACHE: str | None = None
 _GIT_BASH_UNAME = re.compile(r"^(MINGW|MSYS|CYGWIN)")
 
@@ -1376,13 +1310,15 @@ def _probe_bash_uname(candidate: str) -> tuple[int, str, str]:
 def _bash_executable() -> str:
     """Верифицированный bash для контрактных тестов (fail-closed, без skip).
 
-    POSIX — ``bash``. Windows — только явно найденный и верифицированный
-    Git-for-Windows bash: сначала известные расположения
-    (``ProgramFiles/Git/bin/bash.exe`` и т.п.), затем ``bash`` из PATH;
-    каждый кандидат проверяется реальной пробой ``uname -s`` на
-    MINGW/MSYS/CYGWIN — «bash» из PATH на hosted Windows разрешается в
-    System32-лаунчер WSL (run 39305339493: rc=1, пустой stderr) и потому
-    отвергается. Нет верифицируемого bash — явный AssertionError с
+    POSIX — ``bash``. Windows — только явно построенные известные
+    расположения Git-for-Windows (``ProgramFiles``/``ProgramFiles(x86)``/
+    ``ProgramW6432``/``LOCALAPPDATA`` → ``…/Git/bin/bash.exe``); каждый
+    кандидат проверяется реальной пробой ``uname -s`` на
+    MINGW/MSYS/CYGWIN. «Bash» из PATH кандидатом не является вовсе:
+    неквалифицированный PATH-bash на hosted Windows может разрешиться не
+    в Git Bash (гипотеза H1 по сигнатуре отказа rc=1/пустой stderr
+    run 39305339493; нативно не доказана), поэтому опора — только явные
+    пути. Нет верифицируемого bash — явный AssertionError с
     диагностикой всех проб, а не skip.
     """
     global _BASH_CACHE
@@ -1402,9 +1338,6 @@ def _bash_executable() -> str:
     if env.get("LOCALAPPDATA"):
         roots.append(f"{env['LOCALAPPDATA']}/Programs/Git/bin/bash.exe")
     candidates.extend(item for item in roots if os.path.isfile(item))
-    from_path = shutil.which("bash")
-    if from_path:
-        candidates.append(from_path)
     tried = []
     for candidate in candidates:
         code, out, err = _probe_bash_uname(candidate)
@@ -1414,8 +1347,8 @@ def _bash_executable() -> str:
             return candidate
     detail = "; ".join(tried) if tried else "кандидатов нет"
     raise AssertionError(
-        "не найден верифицируемый Git-for-Windows bash (ожидался uname "
-        f"MINGW/MSYS/CYGWIN); пробы: {detail}"
+        "не найден верифицируемый Git-for-Windows bash в известных расположениях "
+        f"(ожидался uname MINGW/MSYS/CYGWIN); пробы: {detail}"
     )
 
 
@@ -1542,10 +1475,12 @@ class LinuxCiBuilderRouteTests(unittest.TestCase):
     ) -> subprocess.CompletedProcess[str]:
         """Исполнить извлечённый shell-фрагмент с fake-исполняемыми в PATH.
 
-        Bash — только верифицированный ``_bash_executable()`` (не «bash» из
-        PATH: на hosted Windows он разрешается в System32-лаунчер WSL);
-        FAKE_LOG_DIR конвертируется в POSIX-форму через ``_bash_path`` —
-        Windows-путь ``C:\\native`` в Bash-окружении сам не превращается.
+        Bash — только верифицированный ``_bash_executable()`` (не «bash»
+        из PATH: на Windows такой кандидат не верифицирован — гипотеза H1
+        по сигнатуре отказа rc=1/пустой stderr run 39305339493, нативно
+        не доказана); FAKE_LOG_DIR конвертируется в POSIX-форму через
+        ``_bash_path`` — Windows-путь ``C:\\native`` в Bash-окружении сам
+        не превращается.
         """
         bash = _bash_executable()
         env = dict(os.environ)
@@ -1567,177 +1502,188 @@ class LinuxCiBuilderRouteTests(unittest.TestCase):
     def setUp(self) -> None:
         _reset_bash_cache()
 
-    def _synthetic_windows(self, case: Path, *, with_git_bash: bool):
-        """Синтетическая Windows-среда (os.name='nt'), НЕ native-прогон.
+    @contextlib.contextmanager
+    def _mock_windows_discovery(
+        self,
+        *,
+        uname_answers: dict[str, tuple[int, str, str]],
+        isfile: set[str],
+        which: str | None = "C:/Windows/System32/bash.exe",
+    ):
+        """Полностью контролируемые входы discovery под os.name='nt'.
 
-        PATH начинается с каталога «WSL bash» (эмуляция System32-лаунчера
-        впереди Git), ``ProgramFiles`` указывает на фейковый «Git Bash»
-        (или отсутствует). Возвращает пару патчей и путь «Git Bash»
-        (None, если with_git_bash=False).
+        Все четыре Git-переменные и PATH заменяются (никакой утечки host env),
+        which замокан — он вообще не должен использоваться для пробы;
+        uname-пробы отвечаются моком subprocess.run. Никакой текстовый
+        файл не выдаётся за native .exe (rereview-2 R2) — исполняемых
+        синтетических обёрток больше нет. yield (probes, which_mock).
         """
         from unittest import mock
 
-        _reset_bash_cache()
-        wsl_dir = case / "path-bin"
-        wsl_dir.mkdir()
-        wsl_body = _render_fake(_WSL_FAKE_TEMPLATE)
-        for wsl_name in ("bash", "bash.EXE"):
-            wsl = wsl_dir / wsl_name
-            wsl.write_bytes(wsl_body.encode("utf-8"))
-            wsl.chmod(wsl.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        environ: dict[str, str] = {
-            "PATH": os.pathsep.join([str(wsl_dir), os.environ.get("PATH", "")])
+        probes: list[list[str]] = []
+
+        def fake_run(argv, *args, **kwargs):
+            probes.append([str(item) for item in argv])
+            answer = uname_answers.get(str(argv[0]))
+            if answer is None:
+                return subprocess.CompletedProcess(argv, 0, stdout="Linux\n", stderr="")
+            code, out, err = answer
+            return subprocess.CompletedProcess(argv, code, stdout=out + "\n", stderr=err)
+
+        env = {
+            "ProgramFiles": "C:/Program Files",
+            "ProgramFiles(x86)": "C:/Program Files (x86)",
+            "ProgramW6432": "C:/ProgramW6432",
+            "LOCALAPPDATA": "C:/Users/runneradmin/AppData/Local",
+            "PATH": "C:/nowhere",
         }
-        git_bash: Path | None = None
-        if with_git_bash:
-            # «usr/bin» синтетического Git Bash: только рабочий bash,
-            # чтобы env-shebang'и стабов не попадали в «WSL bash»,
-            # а fake-исполняемые теста не затенялись.
-            git_usr_bin = case / "git-usr-bin"
-            git_usr_bin.mkdir()
-            bash_link = git_usr_bin / "bash"
-            try:
-                bash_link.symlink_to(_real_bash())
-            except OSError:
-                bash_link.write_text(
-                    f"#!{_real_bash()}\nexec {_real_bash()} \"$@\"\n",
-                    encoding="utf-8",
-                )
-                bash_link.chmod(
-                    bash_link.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-                )
-            git_bash = case / "ProgramFiles" / "Git" / "bin" / "bash.exe"
-            git_bash.parent.mkdir(parents=True)
-            _write_fake(
-                git_bash.parent,
-                "bash.exe",
-                _render_fake(_GIT_FAKE_TEMPLATE, git_usr_bin=git_usr_bin),
-            )
-            environ["ProgramFiles"] = str(case / "ProgramFiles")
-        else:
-            environ["ProgramFiles"] = str(case / "missing-ProgramFiles")
-        environ["LOCALAPPDATA"] = str(case / "missing-LOCALAPPDATA")
-        return (
+        with (
             mock.patch("os.name", "nt"),
-            mock.patch.dict(os.environ, environ, clear=False),
-        ), git_bash
+            mock.patch.dict(os.environ, env, clear=False),
+            mock.patch("os.path.isfile", side_effect=lambda p: p in isfile),
+            mock.patch(
+                "tests.test_release.shutil.which", return_value=which
+            ) as which_mock,
+            mock.patch("tests.test_release.subprocess.run", side_effect=fake_run),
+        ):
+            yield probes, which_mock
 
-    def test_wsl_launcher_signature_documented(self):
-        """Премиса discovery: PATH-«bash» может быть WSL-лаунчером.
+    def test_discovery_selects_known_git_location_verified_by_uname(self):
+        """Discovery: известное расположение Git, верифицированное uname.
 
-        Наблюдённый на run 39305339493 сигнатурный отказ всех трёх
-        bash-тестов: rc=1, stderr ПУСТ, сообщение уходит в stdout —
-        именно поэтому «bash» из PATH нельзя использовать напрямую,
-        а проверка uname обязана отвергать Linux/WSL.
+        Все входы контролируются (env/which/isfile/probe) — ни один хостовый
+        кандидат не может быть даже опробован; проба ровно одна и адресная.
         """
-        with tempfile.TemporaryDirectory(prefix="keklib-ci-wsl-") as tmp:
-            case = Path(tmp)
-            bin_dir = case / "bin"
-            bin_dir.mkdir()
-            _write_fake(bin_dir, "bash", _render_fake(_WSL_FAKE_TEMPLATE))
-            result = subprocess.run(
-                ["bash", "-c", "echo probe"],
-                env={
-                    **os.environ,
-                    "PATH": os.pathsep.join(
-                        [str(bin_dir), os.environ.get("PATH", "")]
-                    ),
-                },
-                capture_output=True,
-                text=True,
-                timeout=60,
+        git_bash = "C:/Program Files (x86)/Git/bin/bash.exe"
+        with self._mock_windows_discovery(
+            uname_answers={git_bash: (0, "MINGW64_NT-10.0-19045", "")},
+            isfile={git_bash},
+        ) as (probes, which_mock):
+            discovered = _bash_executable()
+        self.assertEqual(discovered, git_bash)
+        self.assertEqual(probes, [[git_bash, "-c", "uname -s"]])
+        which_mock.assert_not_called()
+
+    def test_discovery_fails_closed_and_never_probes_bare_which_bash(self):
+        """Fail-closed без верифицируемых расположений; bare which-bash не пробуется.
+
+        Регрессия native-границы (rereview-2): «bash» из PATH —
+        неквалифицированный кандидат (может быть не Git Bash; сигнатура
+        rc=1/пустой stderr run 39305339493 — гипотеза H1, нативно не
+        доказана) и потому не кандидат вовсе. Без известных расположений —
+        явный AssertionError с диагностикой, а не skip и не PATH-поиск.
+        """
+        with self._mock_windows_discovery(
+            uname_answers={},
+            isfile=set(),
+            which="C:/Windows/System32/bash.exe",
+        ) as (probes, which_mock):
+            with self.assertRaises(AssertionError) as ctx:
+                _bash_executable()
+        self.assertIn("Git-for-Windows", str(ctx.exception))
+        which_mock.assert_not_called()
+        self.assertEqual(probes, [], "ни один спавн для discovery не допускается")
+
+    def test_discovery_rejects_non_msys_uname_and_tries_next_known_location(self):
+        """uname без MINGW/MSYS/CYGWIN отвергается; следующий кандидат проверяется."""
+        first = "C:/Program Files/Git/bin/bash.exe"
+        second = "C:/Program Files (x86)/Git/bin/bash.exe"
+        with self._mock_windows_discovery(
+            uname_answers={
+                first: (0, "Linux", ""),
+                second: (0, "MSYS_NT-10.0-19045", ""),
+            },
+            isfile={first, second},
+        ) as (probes, which_mock):
+            discovered = _bash_executable()
+        self.assertEqual(discovered, second)
+        self.assertEqual(
+            probes,
+            [[first, "-c", "uname -s"], [second, "-c", "uname -s"]],
+        )
+        which_mock.assert_not_called()
+
+    def test_bash_path_converts_via_cygpath_argv_of_given_bash(self):
+        """Конвертация — cygpath -u указанного bash, путь как argv-элемент."""
+        from unittest import mock
+
+        seen: dict[str, list[str]] = {}
+
+        def fake_run(argv, *args, **kwargs):
+            seen["argv"] = [str(item) for item in argv]
+            return subprocess.CompletedProcess(
+                argv, 0, stdout="/c/Users/RUNNER~1/tmp\n", stderr=""
             )
-            self.assertEqual(result.returncode, 1)
-            self.assertEqual(result.stderr, "")
-            self.assertIn("no installed distributions", result.stdout)
 
-    def test_bash_discovery_prefers_verified_git_bash_over_path_wsl(self):
-        """Discovery: явный Git Bash из ProgramFiles, а не «bash» из PATH.
+        bash = "C:/Program Files/Git/bin/bash.exe"
+        windows_path = r"C:\Users\RUNNER~1\AppData\Local\Temp\keklib"
+        with (
+            mock.patch("os.name", "nt"),
+            mock.patch("tests.test_release.subprocess.run", side_effect=fake_run),
+        ):
+            converted = _bash_path(bash, windows_path)
+        self.assertEqual(converted, "/c/Users/RUNNER~1/tmp")
+        self.assertEqual(
+            seen["argv"],
+            [bash, "-c", 'cygpath -u -- "$1"', "cygpath", windows_path],
+            "Windows-путь передаётся argv-элементом, не интерполяцией в скрипт",
+        )
 
-        Даже когда PATH начинается с WSL-подобного bash (System32 впереди
-        Git на hosted Windows), discovery обязан вернуть верифицированный
-        MINGW/MSYS/CYGWIN bash из известного расположения Git-for-Windows.
+        def failing_run(argv, *args, **kwargs):
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="cygpath: failure")
+
+        with (
+            mock.patch("os.name", "nt"),
+            mock.patch("tests.test_release.subprocess.run", side_effect=failing_run),
+        ):
+            with self.assertRaises(AssertionError) as ctx:
+                _bash_path(bash, windows_path)
+        self.assertIn("cygpath", str(ctx.exception))
+        self.assertIn("cygpath: failure", str(ctx.exception))
+
+        if os.name != "nt":
+            with mock.patch("tests.test_release.subprocess.run") as run_mock:
+                self.assertEqual(_bash_path("bash", "/tmp/opencode/x"), "/tmp/opencode/x")
+            run_mock.assert_not_called()
+
+    def test_execute_spawns_verified_bash_and_converts_log_dir(self):
+        """Shell-контракты исполняются верифицированным bash хоста.
+
+        Spy только ЗАПИСЫВАЕТ argv и делегирует настоящему
+        subprocess.run: никакого текстового файла за native .exe (R2) —
+        спавнится ровно тот bash, который вернул _bash_executable() на
+        этой ОС (POSIX — bash хоста; Windows — верифицированный Git
+        Bash), FAKE_LOG_DIR идёт через _bash_path, fake python получает
+        точный argv.
         """
-        with tempfile.TemporaryDirectory(prefix="keklib-ci-disc-") as tmp:
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory(prefix="keklib-ci-plumb-") as tmp:
             case = Path(tmp)
-            patches, git_bash = self._synthetic_windows(case, with_git_bash=True)
-            assert git_bash is not None
-            with patches[0], patches[1]:
-                discovered = _bash_executable()
-            self.assertEqual(discovered, str(git_bash))
-            # uname-проба действительно прошла и MINGW принят
-            code, uname, _err = _probe_bash_uname(discovered)
-            self.assertEqual((code, uname), (0, "MINGW64_NT-10.0-19045"))
-
-    def test_bash_discovery_fails_closed_when_only_wsl_in_path(self):
-        """Fail-closed: без верифицируемого Git Bash — явный отказ, не skip."""
-        with tempfile.TemporaryDirectory(prefix="keklib-ci-nobash-") as tmp:
-            case = Path(tmp)
-            patches, git_bash = self._synthetic_windows(case, with_git_bash=False)
-            self.assertIsNone(git_bash)
-            with patches[0], patches[1]:
-                with self.assertRaises(AssertionError) as ctx:
-                    _bash_executable()
-            message = str(ctx.exception)
-            self.assertIn("Git-for-Windows", message)
-            self.assertIn("uname", message, "диагностика обязана показывать пробы кандидатов")
-
-    def test_bash_path_converts_windows_paths_via_discovered_bash(self):
-        """Bash-лицевые пути конвертируются cygpath найденного bash.
-
-        Windows-путь ``C:\\native`` в Bash-окружении сам в POSIX не
-        превращается: FAKE_LOG_DIR и path-argv обязаны идти через
-        ``cygpath -u`` того самого верифицированного bash; POSIX-пути
-        проходят без изменений.
-        """
-        with tempfile.TemporaryDirectory(prefix="keklib-ci-cyg-") as tmp:
-            case = Path(tmp)
-            patches, git_bash = self._synthetic_windows(case, with_git_bash=True)
-            assert git_bash is not None
-            windows_path = r"C:\Users\RUNNER~1\AppData\Local\Temp\keklib-ci-x"
-            with patches[0], patches[1]:
-                bash = _bash_executable()
-                converted = _bash_path(bash, windows_path)
-                passthrough = _bash_path(bash, str(case))
-            self.assertEqual(converted, "/c/Users/RUNNER~1/AppData/Local/Temp/keklib-ci-x")
-            self.assertEqual(passthrough, str(case))
-
-    def test_execute_routes_scripts_through_verified_git_bash(self):
-        """_execute не использует «bash» из PATH: только верифицированный.
-
-        Синтетическая Windows-среда: PATH-«bash» — WSL-лаунчер (старый
-        код падал ровно сигнатурой native-прогона), ``ProgramFiles``
-        содержит верифицируемый «Git Bash». Извлечённый run-скрипт
-        обязан исполниться через него: fake python вызван с точным argv,
-        лог лежит в конвертированном FAKE_LOG_DIR.
-        """
-        with tempfile.TemporaryDirectory(prefix="keklib-ci-exec-") as tmp:
-            case = Path(tmp)
-            patches, git_bash = self._synthetic_windows(case, with_git_bash=True)
-            assert git_bash is not None
             bin_dir = case / "bin"
             bin_dir.mkdir()
             _write_fake(bin_dir, "python", _FAKE_PYTHON)
-            script = (
-                "python tools/build_in_container.py --build-image "
-                "--build-bundle --output dist"
-            )
-            with patches[0], patches[1]:
-                bash = _bash_executable()
+            script = "python --plumb-probe"
+            bash = _bash_executable()
+            real_run = subprocess.run
+            spawned: list[list[str]] = []
+
+            def spy_run(argv, *args, **kwargs):
+                spawned.append([str(item) for item in argv])
+                return real_run(argv, *args, **kwargs)
+
+            real_path = _bash_path
+            with (
+                mock.patch("tests.test_release.subprocess.run", side_effect=spy_run),
+                mock.patch(
+                    "tests.test_release._bash_path", side_effect=real_path
+                ) as path_mock,
+            ):
                 result = self._execute(script, bin_dir=bin_dir, cwd=case)
-                self.assertEqual(
-                    result.returncode, 0, _bash_diag(result, bash)
-                )
-                self.assertEqual(
-                    _fake_calls(case / "python.log"),
-                    [[
-                        "tools/build_in_container.py",
-                        "--build-image",
-                        "--build-bundle",
-                        "--output",
-                        "dist",
-                    ]],
-                )
+            self.assertEqual(result.returncode, 0, _bash_diag(result, bash))
+            self.assertEqual(spawned, [[bash, "-c", script]])
+            path_mock.assert_called_once_with(bash, str(case))
+            self.assertEqual(_fake_calls(case / "python.log"), [["--plumb-probe"]])
 
     def test_linux_build_runs_existing_driver_with_both_flags(self):
         """Linux-сборка — существующий драйвер билдера, не второй рецепт.
