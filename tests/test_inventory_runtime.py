@@ -21,6 +21,7 @@ import ast
 import contextlib
 import hashlib
 import io
+import itertools
 import json
 import os
 import re
@@ -28,6 +29,7 @@ import sqlite3
 import struct
 import subprocess
 import sys
+import time
 import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -89,16 +91,36 @@ def _fake_pe_bytes() -> bytes:
     return bytes(header)
 
 
+#: DOS-время записи base_library.zip — константа, а не wallclock: ZIP-байты
+#: детерминированы и не зависят от 2-секундной сетки DOS времени прогона
+#: (нативный CI 39280697640, Windows 3.11: медленный runner пересёк границу
+#: сетки между созданием фикстуры и ожидаемых байтов — SHA-256 разошлись).
+_BASE_LIBRARY_DATE_TIME = (1980, 1, 1, 0, 0, 0)
+
+
+def _base_library_zip_bytes() -> bytes:
+    """Детерминированные байты base_library.zip с закреплённым DOS-временем.
+
+    Единственный writer и для фикстуры комплекта, и для ожидаемых байтов:
+    SHA-256 в отчёте инвентаризации обязан совпадать с хешем ровно этих
+    байтов независимо от стеночных часов тестовой машины.
+    """
+    info = zipfile.ZipInfo("encodings.py", date_time=_BASE_LIBRARY_DATE_TIME)
+    info.compress_type = zipfile.ZIP_STORED
+    info.external_attr = 0o600 << 16
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
+        archive.writestr(info, b"")
+    return buffer.getvalue()
+
+
 def _fake_bundle(dist: Path, executable: str) -> None:
     """Фикстурный onedir-комплект вместо реального PyInstaller-прогона."""
     bundle = dist / "keklib-cli"
     internal = bundle / "_internal"
     internal.mkdir(parents=True)
     (bundle / executable).write_bytes(_fake_pe_bytes())
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
-        archive.writestr("encodings.py", b"")
-    (internal / "base_library.zip").write_bytes(buffer.getvalue())
+    (internal / "base_library.zip").write_bytes(_base_library_zip_bytes())
     (internal / "sqlite3.dll").write_bytes(_fake_pe_bytes())
     (internal / "_sha2.pyd").write_bytes(_fake_pe_bytes())
     # Extensionless Mach-O: framework-runtime macOS вида Python.framework.
@@ -429,12 +451,11 @@ class ReportContractTests(unittest.TestCase):
             self.assertIn(entry["type"], ("file", "symlink"))
             self.assertIsInstance(entry["size"], int)
             self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED) as archive:
-            archive.writestr("encodings.py", b"")
+        # Ожидаемые байты — тот же единственный writer с закреплённым
+        # DOS-временем: хеш из отчёта не зависит от стеночных часов.
         self.assertEqual(
             files["_internal/base_library.zip"]["sha256"],
-            hashlib.sha256(buffer.getvalue()).hexdigest(),
+            hashlib.sha256(_base_library_zip_bytes()).hexdigest(),
         )
 
         # Библиотечный инвентарь (переиспользованный) дополнен нативными
@@ -514,6 +535,40 @@ class ReportContractTests(unittest.TestCase):
         self.assertEqual(
             (PROJECT_ROOT / "packaging" / "targets.json").read_bytes(),
             self.targets_before,
+        )
+
+    def test_base_library_hash_pins_dos_time_not_wallclock(self):
+        """Хеш base_library.zip в отчёте не зависит от стеночных часов.
+
+        Нативный CI (run 39280697640, Windows 3.11) поймал расхождение
+        SHA-256 в ``test_report_contract``: ``writestr`` со строковым
+        именем вшивает ``time.localtime`` в DOS-время заголовка ZIP, и на
+        медленном runner между созданием фикстуры и ожидаемых байтов
+        пересекалась 2-секундная сетка DOS — байты и хеши расходились при
+        одинаковом payload. Часы подменяются детерминированно (каждый
+        запрос времени сдвигается через границу сетки, без sleep): байты
+        фикстуры обязаны быть закреплены константой и совпадать с
+        ожидаемыми при любых показаниях часов.
+        """
+        calls = itertools.count()
+
+        def fake_localtime(seconds=None):
+            step = next(calls)
+            return time.struct_time(
+                (1980, 1, 1, 0, 0, 2 + 2 * step, 1, 1, -1)
+            )
+
+        with patched_stages(self.toc), mock.patch(
+            "time.localtime", fake_localtime
+        ):
+            report_path = ir.inventory_runtime(
+                self.TARGET, source_sha=VALID_SHA, output=self.out
+            )
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        files = {entry["path"]: entry for entry in report["bundle"]["files"]}
+        self.assertEqual(
+            files["_internal/base_library.zip"]["sha256"],
+            hashlib.sha256(_base_library_zip_bytes()).hexdigest(),
         )
 
     def test_symlink_entries_recorded_without_hash(self):
