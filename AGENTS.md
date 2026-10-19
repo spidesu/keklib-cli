@@ -900,6 +900,45 @@ overview-форму без журнала прогонов (правило — �
     native_build_verified только linux-x86_64, внешние CI/нативные
     Windows/macOS-прогоны не выполнялись; финальный scoped re-review
     всей волны — отдельно.
+- **Подготовительное закрытие native-target (2026-10-19, волна
+  native-artifacts по брифу native-closure-brief.md)** — по фактическим
+  diagnostic inventory-отчётам трёх pending-target (source SHA ветки,
+  run SUCCESS 3/3, python.org CPython 3.14.8: Windows Server 2022,
+  macOS 15 Intel, macOS 14 ARM; SQLite 3.50.4+FTS5, OpenSSL 3.5.9)
+  выполнено до реальных сборок: (1) `packaging/toolchain.json` —
+  sqlite=3.50.4 трём native-target по факту отчётов,
+  `native_build_verified=false`/`verified_on=null` сохранены (пин — не
+  приёмка), linux-пин/builder не тронуты, notes без PII/scratch-путей;
+  (2) лицензионное закрытие `packaging/license-closure.json` схемы 2 +
+  `packaging/licenses/` (cpython-win/cpython-mac runtime LICENSE с
+  условиями Microsoft Distributable Code, ms-vcrt, zlib-ng, openssl
+  3.5.9 Apache-2.0 upstream, sqlite public domain (sqlite.org),
+  xz 5.2.5, bzip2 1.0.8, libffi 3.4.4, mpdecimal 4.0.0, zstd 1.5.7
+  BSD-ветка, expat) — все тексты с официального upstream HTTP без
+  auth (python/cpython-source-deps теги по PCbuild/get_externals.bat
+  v3.14.8, openssl.org tarball — побайтовое совпадение, python.org
+  embed-zip — побайтовая сверка runtime-файлов, кроме sqlite3.dll:
+  байты hostedtoolcache отличаются при той же версии — зафиксировано
+  честно); Linux-набор не переписан; coverage — узкие пути/наборы
+  компонентов, системные/JDK DLL не покрываются и блокируют;
+  readline macOS = системный libedit (не GNU readline, не
+  распространяется), readline-gpl остаётся блокирующим; (3)
+  `tools/build_portable.py`: лицензионный инвентарь видит extensionless
+  Mach-O (framework-runtime), PE-magic без расширения, расширения в
+  любом регистре + `.exe`, «MZ» без PE-сигнатуры — тоже binary
+  (fail-closed усилен, не ослаблен); (4) `.github/workflows/portable.yml`:
+  input `scope` (choice, default `all`; `windows-macos` — подготовка трёх
+  native-target без gate/SHA256SUMS/verified-portable), матрица
+  фильтруется по scope поверх targets.json, build+smoke обязательны в
+  обоих режимах, `release_gate.py` не менялся; (5) TDD: пины по
+  evidence, MachO/PE инвентарь/гейт, симуляция полного состава всех трёх
+  отчётов против реального манифеста, неизвестный бинарь блокирует,
+  libedit/GNU-readline различие, workflow all/частичный gate,
+  Windows-license notices; ExistingBuilderTests актуализированы
+  предметно. Нативные сборки/smoke трёх target — следующий шаг
+  координатора (scope=windows-macos), `native_build_verified` остаются
+  false до полного выпуска. Отчёт —
+  `.superpowers/sdd/2026-02-11-keklib-cli-portable/native-closure-report.md`.
 
 Проверенные команды (текущий Linux, CachyOS glibc 2.44, CPython 3.14.8):
 

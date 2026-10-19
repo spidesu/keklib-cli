@@ -395,14 +395,15 @@ def native_binary_deps(path: Path) -> dict[str, object] | None:
 def native_walk_paths(
     bundle: Path, files: list[dict[str, object]]
 ) -> list[str]:
-    """Нативные бинари полного обхода по magic, включая файлы без расширения.
+    """Нативные бинари полного обхода по magic (страховка инвентаря сборки).
 
-    Библиотечный предикат сборки распознаёт расширения и ELF-magic, но не
-    безымянный Mach-O: framework-runtime macOS вида
-    ``_internal/Python.framework/Versions/3.14/Python`` — обычный Mach-O
-    файл без библиотечного расширения. Такой файл обязан получить записи
-    зависимостей/provenance наравне с остальными; symlink-записи не
-    разыменовываются (цель учитывается в собственном месте дерева).
+    Библиотечный предикат сборки распознаёт расширения (в любом регистре) и
+    magic ELF/Mach-O/PE, включая extensionless Mach-O framework-runtime
+    macOS вида ``_internal/Python.framework/Versions/3.14/Python``. Этот
+    полный обход остаётся диагностической страховкой: любой бинарь, видимый
+    здесь, но не в контракте лицензионного инвентаря, означает, что предикат
+    надо расширять. symlink-записи не разыменовываются (цель учитывается в
+    собственном месте дерева).
     """
     paths: list[str] = []
     for entry in files:
@@ -588,10 +589,13 @@ def build_report(
             "acceptance, не устанавливает native_build_verified, не создаёт "
             "release-asset и не заполняет пины toolchain.json. Факты "
             "предназначены для следующего этапа закрепления пинов и "
-            "лицензионного закрытия. Записи libraries с recognized_by="
-            "\"full_walk_magic\" — диагностическое дополнение по magic "
-            "(например, extensionless Mach-O framework runtime), не часть "
-            "контракта лицензионного инвентаря."
+            "лицензионного закрытия. Библиотечный инвентарь сборки "
+            "(recognized_by=\"library_inventory\") распознаёт бинари по "
+            "расширению и magic ELF/Mach-O/PE, включая extensionless Mach-O "
+            "framework runtime. Записи recognized_by=\"full_walk_magic\" — "
+            "диагностическая страховка полного обхода для форматов, которые "
+            "контракт лицензионного инвентаря ещё не распознаёт; их "
+            "появление означает, что инвентарь сборки надо расширять."
         ),
         "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source_sha": sha,

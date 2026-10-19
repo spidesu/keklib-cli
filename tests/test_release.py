@@ -1034,6 +1034,75 @@ class WorkflowStructureTests(unittest.TestCase):
             self.assertIn(f"name: smoke-report-{target}", text)
             self.assertIn(f"name: keklib-cli-{target}", text)
 
+    def test_portable_scope_input_choice_with_all_default(self):
+        """Режим подготовки: input scope — choice, default all, ровно два варианта.
+
+        all (default) — полное выпускное поведение без изменений;
+        windows-macos — подготовительный прогон только трёх native-target.
+        """
+        text = self.PORTABLE.read_text(encoding="utf-8")
+        inputs = text.index("inputs:")
+        scope = text.index("scope:", inputs)
+        body = text[scope : text.index("jobs:")]
+        self.assertIn("type: choice", body)
+        self.assertIn("default: all", body)
+        options = body[body.index("options:") :]
+        option_lines = [
+            line.strip() for line in options.splitlines() if line.strip().startswith("- ")
+        ]
+        self.assertEqual(option_lines, ["- all", "- windows-macos"])
+
+    def test_portable_gate_guarded_by_full_scope(self):
+        """Выпускной гейт запускается только в полном режиме (scope=all).
+
+        Подготовительный windows-macos НЕ является release-acceptance: gate
+        не выполняется, SHA256SUMS и verified-portable не создаются — они
+        существуют только внутри gate-job'а (шаг release_gate.py и upload).
+        """
+        text = self.PORTABLE.read_text(encoding="utf-8")
+        gate_job = self._job_section(text, "gate:")
+        self.assertIsNotNone(gate_job, "gate-job отсутствует в portable.yml")
+        assert gate_job is not None
+        self.assertIn("if:", gate_job)
+        self.assertIn("inputs.scope == 'all'", gate_job)
+        # SHA256SUMS и verified-portable существуют только внутри gate.
+        gate_start = text.index("  gate:")
+        after_gate = text[gate_start:]
+        self.assertIn("release_gate.py", after_gate)
+        self.assertIn("verified-portable", after_gate)
+
+    def test_portable_matrix_filters_scope_without_hardcoding(self):
+        """Матрица фильтруется по scope поверх targets.json, без списка имён."""
+        text = self.PORTABLE.read_text(encoding="utf-8")
+        matrix_job = self._job_section(text, "matrix:")
+        self.assertIsNotNone(matrix_job, "matrix-job отсутствует")
+        assert matrix_job is not None
+        self.assertIn("inputs.scope", matrix_job)
+        # Фильтр — по system из targets.json (Linux исключается в windows-macos),
+        # а не по захардкоженному списку target в workflow.
+        self.assertIn('"Linux"', matrix_job)
+        for target in ("windows-x86_64", "macos-x86_64", "macos-arm64"):
+            self.assertNotIn(f'"{target}"', matrix_job, "имена target не дублируются в workflow")
+
+    def test_portable_build_and_smoke_mandatory_in_both_scopes(self):
+        """build и smoke не зависят от scope: обязательны в любом режиме."""
+        text = self.PORTABLE.read_text(encoding="utf-8")
+        for job in ("build:", "smoke:"):
+            section = self._job_section(text, job)
+            self.assertIsNotNone(section, job)
+            assert section is not None
+            self.assertNotIn("inputs.scope", section, f"{job} не conditioned на scope")
+            self.assertIn("matrix.name", section, f"{job} работает по матрице")
+
+    def test_portable_all_scope_keeps_four_target_gate(self):
+        """Полный режим не ослаблен: gate по-прежнему качает все четыре target."""
+        text = self.PORTABLE.read_text(encoding="utf-8")
+        gate_start = text.index("  gate:")
+        gate = text[gate_start:]
+        for target in _all_targets():
+            self.assertIn(f"name: keklib-cli-{target}", gate, target)
+            self.assertIn(f"name: smoke-report-{target}", gate, target)
+
     def test_actions_pinned_by_commit_sha(self):
         for path in (self.CI, self.PORTABLE):
             for line in path.read_text(encoding="utf-8").splitlines():

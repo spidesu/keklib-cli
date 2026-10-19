@@ -34,6 +34,7 @@ import tarfile
 import tempfile
 import unittest
 import zipfile
+from collections.abc import Sequence
 from pathlib import Path
 from unittest import mock
 
@@ -501,6 +502,34 @@ class PackagingTests(unittest.TestCase):
             self.assertRegex(
                 version, r"^\d", f"неточных пинов в lock быть не должно: {name}=={version}"
             )
+
+    def test_native_targets_sqlite_pins_by_evidence(self) -> None:
+        """Пины трёх native-target — факт инвентаризации, не приёмка.
+
+        Диагностические inventory-отчёты pending-target (python.org runtime
+        3.14.8 на windows-2022/macos-15-intel/macos-14) показали одинаковый
+        SQLite 3.50.4 с FTS5 во всех трёх runtime. Пин фиксирует этот факт;
+        ``native_build_verified`` остаётся ``false``/``verified_on`` null до
+        реальной нативной сборки и полного изолированного smoke каждого
+        target — пин не является заявлением о принятом выпуске.
+        """
+        toolchain = bp.load_toolchain()
+        linux = toolchain["targets"]["linux-x86_64"]
+        self.assertEqual(linux["sqlite"], "3.54.1")
+        self.assertTrue(linux["native_build_verified"])
+        for other in ("windows-x86_64", "macos-x86_64", "macos-arm64"):
+            entry = toolchain["targets"][other]
+            self.assertEqual(entry["sqlite"], "3.50.4", other)
+            self.assertIs(entry["native_build_verified"], False, other)
+            self.assertIsNone(entry["verified_on"], other)
+
+    def test_native_release_gate_uses_new_pins(self) -> None:
+        """Release-гейт сверяет фактический SQLite 3.50.4 с новым пином."""
+        toolchain = bp.load_toolchain()
+        for other in ("windows-x86_64", "macos-x86_64", "macos-arm64"):
+            info = {"python": "3.14.8", "pyinstaller": "6.22.3", "sqlite": "3.50.4"}
+            bp.verify_release_metadata(other, info, toolchain=toolchain,
+                                       sqlite_version="3.50.4")
 
     # 9. onedir и console: не onefile и не GUI.
 
@@ -980,6 +1009,106 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("_internal/extensionless-binary", inventory)
         self.assertNotIn("_internal/python3.14/lib-dynload/plain.pyc", inventory)
         self.assertNotIn("_internal/runtime.dynlib", inventory)
+
+    def test_license_inventory_detects_extensionless_macho(self) -> None:
+        """Framework-runtime macOS (Mach-O без расширения) — в инвентаре.
+
+        Реальный состав pending-target: файл
+        ``_internal/Python.framework/Versions/3.14/Python`` — обычный Mach-O
+        без библиотечного расширения. Раньше его видел только диагностический
+        полный обход inventory-отчёта (``full_walk_magic``); лицензионный
+        инвентарь сборки обязан учитывать его сам — иначе binary runtime
+        выпускается без лицензионного покрытия.
+        """
+        bundle = _make_bundle_dir(self.tmp / "macho")
+        framework = bundle / "_internal" / "Python.framework" / "Versions" / "3.14"
+        framework.mkdir(parents=True)
+        for magic in (
+            b"\xcf\xfa\xed\xfe",  # MH_MAGIC_64 LE
+            b"\xfe\xed\xfa\xcf",  # MH_MAGIC_64 BE
+            b"\xce\xfa\xed\xfe",  # MH_MAGIC LE
+            b"\xca\xfe\xba\xbe",  # FAT BE
+            b"\xbe\xba\xfe\xca",  # FAT LE
+        ):
+            target_dir = bundle / "_internal" / f"macho-{magic.hex()}"
+            target_dir.mkdir()
+            (target_dir / "Python").write_bytes(magic + b"payload")
+        inventory = bp.inventory_bundle_libraries(bundle, target="macos-x86_64")
+        for magic in (
+            b"\xcf\xfa\xed\xfe",
+            b"\xfe\xed\xfa\xcf",
+            b"\xce\xfa\xed\xfe",
+            b"\xca\xfe\xba\xbe",
+            b"\xbe\xba\xfe\xca",
+        ):
+            identifier = f"_internal/macho-{magic.hex()}/Python"
+            self.assertIn(identifier, inventory)
+
+    def test_license_inventory_detects_pe_magic_and_case_extensions(self) -> None:
+        """PE-magic без расширения и расширения в верхнем регистре.
+
+        Реальные имена Windows-состава регистрозависимы в ZIP (VCRUNTIME140.dll,
+        libcrypto-3.dll); архиватор не обязан нормализовать регистр. Инвентарь
+        обязан ловить ``SOMELIB.DLL``/``MODULE.PYD`` и extensionless PE-бинарь
+        по magic «MZ + PE-сигнатура» — как это делает диагностический обход.
+        """
+        bundle = _make_bundle_dir(self.tmp / "pe")
+        internal = bundle / "_internal"
+        (internal / "SOMELIB.DLL").write_bytes(b"x")
+        (internal / "MODULE.PYD").write_bytes(b"x")
+        (internal / "Mixed.Dylib").write_bytes(b"x")
+        (internal / "BOOTLOADER.EXE").write_bytes(b"x")
+        (internal / "extensionless-pe").write_bytes(
+            b"MZ" + b"\x00" * 0x3E + b"\xf0\x00\x00\x00PE\x00\x00payload"
+        )
+        inventory = bp.inventory_bundle_libraries(bundle, target="windows-x86_64")
+        for name in (
+            "_internal/SOMELIB.DLL",
+            "_internal/MODULE.PYD",
+            "_internal/Mixed.Dylib",
+            "_internal/BOOTLOADER.EXE",
+            "_internal/extensionless-pe",
+        ):
+            self.assertIn(name, inventory)
+
+    def test_license_inventory_treats_broken_mz_as_binary(self) -> None:
+        """MZ без валидной PE-сигнатуры — тоже binary: гейт решает явным покрытием.
+
+        Fail-closed: файл с DOS-magic «MZ», но без подтверждаемой PE-структуры
+        не может быть молча пропущен как «не библиотека» — неизвестный binary
+        обязан попасть в инвентарь и блокировать выпуск без контракта.
+        """
+        bundle = _make_bundle_dir(self.tmp / "mz")
+        internal = bundle / "_internal"
+        (internal / "mystery-mz").write_bytes(b"MZbroken-without-pe-header")
+        inventory = bp.inventory_bundle_libraries(bundle, target="windows-x86_64")
+        self.assertIn("_internal/mystery-mz", inventory)
+
+    def test_license_gate_blocks_unknown_macho_and_pe(self) -> None:
+        """Неизвестный Mach-O/PE-бинарь без покрытия блокирует гейт."""
+        bundle, notices = self._license_fixture()
+        components = {
+            "mit-test": {"license": "MIT", "notice": None, "distribution_ok": True}
+        }
+        coverage = self._full_coverage(bundle)
+        manifest = self.tmp / "manifest.json"
+        manifest.write_text(
+            json.dumps(self._manifest_v2(components, coverage)), encoding="utf-8"
+        )
+        (bundle / "_internal" / "Python.framework").mkdir()
+        (bundle / "_internal" / "Python.framework" / "Versions").mkdir()
+        (bundle / "_internal" / "Python.framework" / "Versions" / "3.14").mkdir()
+        (
+            bundle / "_internal" / "Python.framework" / "Versions" / "3.14" / "Python"
+        ).write_bytes(b"\xcf\xfa\xed\xfepayload")
+        (bundle / "_internal" / "SNEAKY.DLL").write_bytes(b"x")
+        with self.assertRaises(bp.PackagingError) as ctx:
+            bp.verify_license_closure(
+                bundle, target="macos-x86_64", manifest_path=manifest, notices_root=notices
+            )
+        message = str(ctx.exception)
+        self.assertIn("_internal/Python.framework/Versions/3.14/Python", message)
+        self.assertIn("_internal/SNEAKY.DLL", message)
 
     def _license_fixture(self) -> tuple[Path, Path]:
         """Комплект с одной библиотекой + локальный манифест с текстами."""
@@ -1674,6 +1803,392 @@ class PyInstallerSubprocessEnvTests(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
         self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
         return tmp
+
+
+# ---------------------------------------------------------------------------
+# Лицензионное закрытие трёх native-target по фактическим inventory-отчётам.
+#
+# Фикстуры ниже — ТОЧНЫЕ списки файлов bundle из диагностических отчётов
+# native-run-39263502011 (schema 2, source SHA e8185f5, run SUCCESS 3/3:
+# python.org CPython 3.14.8 на windows-2022 / macos-15-intel / macos-14;
+# оба macOS-target имеют идентичные относительные пути). Байты файлов в
+# фикстурах синтетические (magic/расширения сохранены), прогоны против
+# реального манифеста packaging/license-closure.json — честная симуляция
+# контракта, а НЕ нативная приёмка: реальные сборки/smoke не выполнялись.
+
+_WINDOWS_REPORT_FILES = (
+    "keklib-cli.exe",
+    "_internal/VCRUNTIME140.dll",
+    "_internal/VCRUNTIME140_1.dll",
+    "_internal/_bz2.pyd",
+    "_internal/_ctypes.pyd",
+    "_internal/_decimal.pyd",
+    "_internal/_hashlib.pyd",
+    "_internal/_lzma.pyd",
+    "_internal/_socket.pyd",
+    "_internal/_sqlite3.pyd",
+    "_internal/_ssl.pyd",
+    "_internal/_wmi.pyd",
+    "_internal/_zstd.pyd",
+    "_internal/base_library.zip",
+    "_internal/libcrypto-3.dll",
+    "_internal/libffi-8.dll",
+    "_internal/libssl-3.dll",
+    "_internal/python314.dll",
+    "_internal/select.pyd",
+    "_internal/sqlite3.dll",
+    "_internal/unicodedata.pyd",
+)
+
+_MACOS_REPORT_FILES = (
+    "keklib-cli",
+    "_internal/base_library.zip",
+    "_internal/libcrypto.3.dylib",
+    "_internal/libssl.3.dylib",
+    "_internal/libzstd.1.dylib",
+    "_internal/Python.framework/Versions/3.14/Python",
+    "_internal/Python.framework/Versions/3.14/Resources/Info.plist",
+    "_internal/python3.14/lib-dynload/_bisect.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_blake2.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_bz2.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_codecs_cn.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_codecs_hk.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_codecs_iso2022.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_codecs_jp.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_codecs_kr.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_codecs_tw.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_csv.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_ctypes.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_decimal.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_hashlib.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_heapq.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_json.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_lzma.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_md5.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_multibytecodec.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_pickle.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_posixsubprocess.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_random.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_scproxy.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_sha1.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_sha2.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_sha3.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_socket.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_sqlite3.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_ssl.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_statistics.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_struct.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/_zstd.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/array.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/binascii.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/fcntl.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/grp.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/math.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/pyexpat.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/readline.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/resource.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/select.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/unicodedata.cpython-314-darwin.so",
+    "_internal/python3.14/lib-dynload/zlib.cpython-314-darwin.so",
+)
+
+
+class NativeTargetsClosureTests(unittest.TestCase):
+    """Закрытие фактического состава windows/macos по реальному манифесту."""
+
+    maxDiff = None
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+
+    def _synthetic_bundle(self, target: str, paths: Sequence[str]) -> Path:
+        """Каталог комплекта с точным списком файлов отчёта.
+
+        Расширения покрывают инвентарь по имени; extensionless бинари
+        (framework-runtime macOS, исполнимый файл macOS) получают настоящий
+        Mach-O magic, чтобы инвентарь видел их по формату, а не по списку.
+        """
+        spec = bp.load_targets()[target]
+        bundle = self.tmp / f"bundle-{target}"
+        for rel in paths:
+            entry = bundle.joinpath(*rel.split("/"))
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            if rel == "_internal/Python.framework/Versions/3.14/Python" or rel == "keklib-cli":
+                entry.write_bytes(b"\xcf\xfa\xed\xfesynthetic mach-o payload")
+            elif rel == "keklib-cli.exe":
+                entry.write_bytes(b"MZ" + b"\x00" * 0x3E + b"\xf0\x00\x00\x00PE\x00\x00")
+            elif rel.endswith(".Info.plist") or rel == (
+                "_internal/Python.framework/Versions/3.14/Resources/Info.plist"
+            ):
+                entry.write_text('<?xml version="1.0"?>\n', encoding="utf-8")
+            else:
+                entry.write_bytes(b"x")
+        self.assertEqual(str(spec["executable"]), paths[0].split("/")[-1])
+        return bundle
+
+    def test_windows_composition_covered_by_real_manifest(self) -> None:
+        bundle = self._synthetic_bundle("windows-x86_64", _WINDOWS_REPORT_FILES)
+        inventory = bp.inventory_bundle_libraries(bundle, target="windows-x86_64")
+        self.assertEqual(len(inventory), len(_WINDOWS_REPORT_FILES))
+        bp.verify_license_closure(bundle, target="windows-x86_64")
+
+    def test_macos_composition_covered_by_real_manifest(self) -> None:
+        for target in ("macos-x86_64", "macos-arm64"):
+            with self.subTest(target=target):
+                bundle = self._synthetic_bundle(target, _MACOS_REPORT_FILES)
+                bp.verify_license_closure(bundle, target=target)
+
+    def test_notices_copied_per_target_without_linux_set(self) -> None:
+        """Уведомления копируются по составу target; Linux-набор не подмешивается."""
+        win = self._synthetic_bundle("windows-x86_64", _WINDOWS_REPORT_FILES)
+        bp.verify_license_closure(win, target="windows-x86_64", copy_notices_to=win)
+        for notice in (
+            "licenses/cpython-win/LICENSE.txt",
+            "licenses/ms-vcrt/NOTICE.txt",
+            "licenses/zlib-ng/LICENSE.md",
+            "licenses/openssl/LICENSE-3.5.9.txt",
+            "licenses/sqlite/PUBLIC-DOMAIN.txt",
+            "licenses/bzip2/LICENSE-1.0.8.txt",
+            "licenses/libffi/LICENSE-3.4.4.txt",
+            "licenses/mpdecimal/COPYRIGHT-4.0.0.txt",
+            "licenses/zstd/LICENSE.txt",
+        ):
+            self.assertTrue((win / notice).is_file(), notice)
+        # Linux-закрытие (Ubuntu provenance) не подменяет platform-уведомления.
+        self.assertFalse((win / "licenses/zlib/copyright.txt").exists())
+        self.assertFalse((win / "licenses/xz/copyright.txt").exists())
+
+        mac = self._synthetic_bundle("macos-arm64", _MACOS_REPORT_FILES)
+        bp.verify_license_closure(mac, target="macos-arm64", copy_notices_to=mac)
+        for notice in (
+            "licenses/cpython-mac/LICENSE.txt",
+            "licenses/openssl/LICENSE-3.5.9.txt",
+            "licenses/sqlite/PUBLIC-DOMAIN.txt",
+            "licenses/zstd/LICENSE.txt",
+            "licenses/xz/COPYING-5.2.5.txt",
+            "licenses/expat/COPYING.txt",
+        ):
+            self.assertTrue((mac / notice).is_file(), notice)
+        # Windows-условия Microsoft не копируются в macOS-комплект.
+        self.assertFalse((mac / "licenses/ms-vcrt/NOTICE.txt").exists())
+
+    def test_unknown_native_binary_blocks_gate(self) -> None:
+        bundle = self._synthetic_bundle("windows-x86_64", _WINDOWS_REPORT_FILES)
+        (bundle / "_internal" / "unknown-vendor.dll").write_bytes(b"x")
+        with self.assertRaises(bp.PackagingError) as ctx:
+            bp.verify_license_closure(bundle, target="windows-x86_64")
+        self.assertIn("_internal/unknown-vendor.dll", str(ctx.exception))
+
+    @staticmethod
+    def _manifest() -> dict[str, object]:
+        return json.loads(
+            (PROJECT_ROOT / "packaging" / "license-closure.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+    def test_windows_component_sets(self) -> None:
+        coverage = self._manifest()["coverage"]
+
+        def components(path: str) -> set[str]:
+            value = coverage[path]
+            return set([value] if isinstance(value, str) else value)
+
+        self.assertEqual(
+            components("keklib-cli.exe"), {"keklib-cli", "pyinstaller-bootloader"}
+        )
+        # python314.dll = CPython-core (включая статические части dtoa/getopt/
+        # cfuhash/qsbr/secret-labs) + статически вкомпилированный zlib-ng
+        # (zlib-модуля отдельным файлом в составе нет, ZLIB_VERSION
+        # «1.3.1.zlib-ng» в отчёте runtime).
+        self.assertEqual(
+            components("_internal/python314.dll"),
+            {
+                "cpython-win-runtime",
+                "dtoa",
+                "getopt",
+                "cfuhash",
+                "qsbr",
+                "secret-labs",
+                "zlib-ng",
+            },
+        )
+        self.assertEqual(
+            components("_internal/VCRUNTIME140.dll"), {"ms-vcrt-python-dist"}
+        )
+        self.assertEqual(
+            components("_internal/VCRUNTIME140_1.dll"), {"ms-vcrt-python-dist"}
+        )
+        self.assertEqual(
+            components("_internal/_bz2.pyd"), {"cpython-win-runtime", "bzip2-1.0.8"}
+        )
+        self.assertEqual(
+            components("_internal/_decimal.pyd"),
+            {"cpython-win-runtime", "mpdecimal-4.0.0"},
+        )
+        self.assertEqual(
+            components("_internal/_hashlib.pyd"),
+            {"cpython-win-runtime", "openssl-3.5.9"},
+        )
+        self.assertEqual(
+            components("_internal/_ssl.pyd"),
+            {"cpython-win-runtime", "openssl-3.5.9"},
+        )
+        self.assertEqual(
+            components("_internal/_lzma.pyd"), {"cpython-win-runtime", "xz-5.2.5"}
+        )
+        self.assertEqual(
+            components("_internal/_zstd.pyd"), {"cpython-win-runtime", "zstd"}
+        )
+        self.assertEqual(components("_internal/sqlite3.dll"), {"sqlite-3.50.4"})
+        self.assertEqual(components("_internal/libffi-8.dll"), {"libffi-3.4.4"})
+        self.assertEqual(components("_internal/libcrypto-3.dll"), {"openssl-3.5.9"})
+        self.assertEqual(components("_internal/libssl-3.dll"), {"openssl-3.5.9"})
+        # Системные DLL Windows (api-ms-*, KERNEL32 и т.п.) в комплекте нет:
+        # их появление — неизвестная позиция инвентаря и блокирует выпуск.
+
+    def test_macos_component_sets(self) -> None:
+        manifest = self._manifest()
+        coverage = manifest["coverage"]
+
+        def resolve(path: str) -> set[str]:
+            """Разрешение покрытия как в гейте: точный ключ, затем шаблон."""
+            if path in coverage:
+                value = coverage[path]
+            else:
+                import fnmatch as _fnmatch
+
+                matched = [
+                    pattern
+                    for pattern in coverage
+                    if any(ch in pattern for ch in "*?[")
+                    and _fnmatch.fnmatch(path, pattern)
+                ]
+                self.assertEqual(len(matched), 1, f"{path}: {matched}")
+                value = coverage[matched[0]]
+            return set([value] if isinstance(value, str) else value)
+
+        # Framework-runtime: CPython-core + те же статические части исходника;
+        # zlib статически НЕ входит (модуль zlib.so линкуется к системной
+        # /usr/lib/libz.1.dylib, которая в комплекте не распространяется).
+        self.assertEqual(
+            resolve("_internal/Python.framework/Versions/3.14/Python"),
+            {
+                "cpython-mac-runtime",
+                "dtoa",
+                "getopt",
+                "cfuhash",
+                "qsbr",
+                "secret-labs",
+            },
+        )
+        # readline.so линкуется к системной /usr/lib/libedit.3.dylib (НЕ GNU
+        # readline, НЕ распространяется в комплекте) — GNU-readline-компонент
+        # на macOS не применяется и остаётся блокирующим для libreadline.so*.
+        self.assertEqual(
+            resolve("_internal/python3.14/lib-dynload/readline.cpython-314-darwin.so"),
+            {"cpython-mac-runtime"},
+        )
+        # bzip2 на macOS — системная библиотека (в отличие от Windows, где
+        # bzip2 статически в _bz2.pyd): компонент bzip2 не приписывается.
+        self.assertEqual(
+            resolve("_internal/python3.14/lib-dynload/_bz2.cpython-314-darwin.so"),
+            {"cpython-runtime"},
+        )
+        self.assertEqual(
+            resolve("_internal/python3.14/lib-dynload/_lzma.cpython-314-darwin.so"),
+            {"cpython-mac-runtime", "xz-5.2.5"},
+        )
+        self.assertEqual(
+            resolve(
+                "_internal/python3.14/lib-dynload/_sqlite3.cpython-314-darwin.so"
+            ),
+            {"cpython-mac-runtime", "sqlite-3.50.4"},
+        )
+        self.assertEqual(
+            resolve("_internal/python3.14/lib-dynload/pyexpat.cpython-314-darwin.so"),
+            {"cpython-mac-runtime", "expat"},
+        )
+        self.assertEqual(
+            resolve(
+                "_internal/python3.14/lib-dynload/_decimal.cpython-314-darwin.so"
+            ),
+            {"cpython-mac-runtime", "mpdecimal"},
+        )
+        for module in ("_sha2", "_sha3", "_blake2", "_md5", "_sha1"):
+            self.assertEqual(
+                resolve(
+                    f"_internal/python3.14/lib-dynload/{module}.cpython-314-darwin.so"
+                ),
+                {"cpython-mac-runtime", "hacl"},
+                module,
+            )
+        self.assertEqual(resolve("_internal/libzstd.1.dylib"), {"zstd"})
+        self.assertEqual(resolve("_internal/libcrypto.3.dylib"), {"openssl-3.5.9"})
+        self.assertEqual(resolve("_internal/libssl.3.dylib"), {"openssl-3.5.9"})
+
+    def test_readline_gpl_still_blocks_and_libedit_distinction(self) -> None:
+        """GNU readline остаётся запрещённым компонентом на любой платформе."""
+        manifest = self._manifest()
+        readline = manifest["components"]["readline-gpl"]
+        self.assertIsNot(readline["distribution_ok"], True)
+        self.assertEqual(manifest["coverage"]["_internal/libreadline.so*"], "readline-gpl")
+        # Появление реального GNU readline-бинаря в macOS-комплекте блокирует.
+        bundle = self._synthetic_bundle("macos-x86_64", _MACOS_REPORT_FILES)
+        (bundle / "_internal" / "libreadline.so.8").write_bytes(b"x")
+        with self.assertRaises(bp.PackagingError):
+            bp.verify_license_closure(bundle, target="macos-x86_64")
+
+    def test_native_notice_texts(self) -> None:
+        """Уведомления platform-компонентов существуют и содержат ключевые тексты."""
+        manifest = self._manifest()
+        components = manifest["components"]
+        needles = {
+            "cpython-win-runtime": (
+                "licenses/cpython-win/LICENSE.txt",
+                ("Microsoft Distributable Code", "bzip2", "libffi",
+                 "Python Software Foundation"),
+            ),
+            "cpython-mac-runtime": (
+                "licenses/cpython-mac/LICENSE.txt",
+                ("Python Software Foundation", "BeOpen", "CNRI"),
+            ),
+            "ms-vcrt-python-dist": (
+                "licenses/ms-vcrt/NOTICE.txt",
+                ("Microsoft Distributable Code", "microsoft.com"),
+            ),
+            "zlib-ng": ("licenses/zlib-ng/LICENSE.md", ("Jean-loup Gailly", "Mark Adler")),
+            "openssl-3.5.9": (
+                "licenses/openssl/LICENSE-3.5.9.txt",
+                ("Apache License", "Version 2.0, January 2004"),
+            ),
+            "sqlite-3.50.4": ("licenses/sqlite/PUBLIC-DOMAIN.txt", ("public domain",)),
+            "xz-5.2.5": ("licenses/xz/COPYING-5.2.5.txt", ("public domain",)),
+            "bzip2-1.0.8": ("licenses/bzip2/LICENSE-1.0.8.txt", ("Julian R Seward",)),
+            "libffi-3.4.4": ("licenses/libffi/LICENSE-3.4.4.txt", ("Anthony Green",)),
+            "mpdecimal-4.0.0": ("licenses/mpdecimal/COPYRIGHT-4.0.0.txt", ("Stefan Krah",)),
+            "zstd": ("licenses/zstd/LICENSE.txt", ("Meta Platforms",)),
+        }
+        for name, (notice, expected) in needles.items():
+            with self.subTest(component=name):
+                entry = components[name]
+                self.assertIs(entry["distribution_ok"], True, name)
+                self.assertEqual(entry["notice"], notice, name)
+                text = (PROJECT_ROOT / "packaging" / notice).read_text(encoding="utf-8")
+                for needle in expected:
+                    self.assertIn(needle, text, f"{name}: {needle!r}")
+        # macOS-файл LICENSE не содержит Windows-условий Microsoft.
+        mac_text = (PROJECT_ROOT / "packaging" / "licenses/cpython-mac/LICENSE.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("Microsoft Distributable Code", mac_text)
+        # Все разрешённые новые компоненты имеют существующие файлы уведомлений.
+        for name, entry in components.items():
+            if entry.get("distribution_ok") is True:
+                notice = entry.get("notice")
+                self.assertIsInstance(notice, str, name)
+                self.assertTrue((PROJECT_ROOT / "packaging" / notice).is_file(), name)
 
 
 if __name__ == "__main__":  # pragma: no cover

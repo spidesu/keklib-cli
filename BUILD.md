@@ -296,17 +296,25 @@ source-tests, строит матрицу четырёх target **из targets.j
 
 Зелёный source CI — это проверка исходников на матрице ОС/Python, а не
 приёмка portable-сборок (для неё требуются нативные smoke-отчёты и
-выпускной гейт). До инвентаризации SQLite сборки Windows/macOS в
-portable-конвейере ожидаемо останавливаются release-гейтом на null-пине
-— это честное поведение, а не сбой.
+выпускной гейт). SQLite-пины всех target заполнены в
+`packaging/toolchain.json` фактами инвентаризации runtime, поэтому
+сборки Windows/macOS больше не останавливаются release-гейтом на null-пине;
+их выпуск остаётся заблокированным до полного гейта четырёх target.
+У `workflow_dispatch` есть режим объёма прогона (input `scope`):
+`all` (по умолчанию) — полный выпускной конвейер с гейтом и
+`SHA256SUMS`; `windows-macos` — подготовительный прогон трёх native-target
+(Linux исключается по `system` из targets.json): build и обязательный
+изолированный smoke выполняются, выпускной гейт не запускается,
+`SHA256SUMS`/`verified-portable` не создаются — это не release-acceptance.
 
-## Диагностическая инвентаризация pending-target (этап перед пинами)
+## Диагностическая инвентаризация pending-target
 
 `.github/workflows/platform-inventory.yml` (`workflow_dispatch`):
 диагностический прогон на нативных стандартных runner'ах трёх
 pending-target (windows-x86_64/windows-2022, macos-x86_64/macos-15-intel,
-macos-arm64/macos-14) собирает факты фактического runtime для
-последующего закрепления SQLite-пинов и лицензионного закрытия. Локально
+macos-arm64/macos-14) собирает факты фактического runtime (этап,
+поставивший SQLite-пины и состав лицензионного закрытия этих target;
+повторный прогон полезен при обновлении toolchain). Локально
 на нативной для target ОС/CPU:
 
     python tools/inventory_runtime.py --target windows-x86_64 \

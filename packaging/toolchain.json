@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "python_required": "3.14.8",
-  "notes": "Закреплённый сборочный toolchain portable-поставки; исполнение обязательно: tools/build_portable.py перед сборкой сверяет фактический CPython и установленные build-зависимости с python-пинами здесь и ==-пинами packaging/requirements-build.lock (verify_toolchain_preflight), а перед публикацией — метаданные runtime с полями ниже (verify_release_metadata). linux-x86_64: SQLite-pin 3.54.1 заполнен фактом инвентаризации на согласованном rootless-билдере Ubuntu 22.04 (packaging/builder/, разрешение пользователя 2026-10-18) и сверен гейтом с фактическим runtime; native_build_verified=true отражает принятый нативный выпуск только для этого target. Windows/macOS: sqlite остаётся null (без выдуманных значений — null блокирует выпуск соответствующего target fail-closed) до реальной нативной инвентаризации в задаче 12. Фактические версии каждой реальной сборки фиксируются в build-info.json комплекта.",
+  "notes": "Закреплённый сборочный toolchain portable-поставки; исполнение обязательно: tools/build_portable.py перед сборкой сверяет фактический CPython и установленные build-зависимости с python-пинами здесь и ==-пинами packaging/requirements-build.lock (verify_toolchain_preflight), а перед публикацией — метаданные runtime с полями ниже (verify_release_metadata). linux-x86_64: SQLite-pin 3.54.1 заполнен фактом инвентаризации на согласованном rootless-билдере Ubuntu 22.04 (packaging/builder/, разрешение пользователя 2026-10-18) и сверен гейтом с фактическим runtime; native_build_verified=true отражает принятый нативный выпуск только для этого target. windows-x86_64/macos-x86_64/macos-arm64: SQLite-pin 3.50.4 заполнен фактом диагностической инвентаризации runtime (inventory-отчёты pending-target: python.org CPython 3.14.8 на runner'ах windows-2022/macos-15-intel/macos-14, во всех трёх runtime SQLite 3.50.4 с FTS5); native_build_verified=false — реальные нативные сборки и полные изолированные smoke этих target ещё не выполнялись, пин не является приёмкой и не снимает выпускные гейты. Фактические версии каждой реальной сборки фиксируются в build-info.json комплекта.",
   "targets": {
     "linux-x86_64": {
       "python": "3.14.8",
@@ -16,28 +16,28 @@
       "python": "3.14.8",
       "pyinstaller": "6.22.3",
       "setuptools": "84.0.0",
-      "sqlite": null,
+      "sqlite": "3.50.4",
       "native_build_verified": false,
       "verified_on": null,
-      "note": "Нативная сборка не выполнялась (нет Windows-доступа); кросс-сборка из Linux запрещена. Spec/конвейер готовы, проверка — задача 12 на runner windows-2022."
+      "note": "Сборка на runner windows-2022 (Windows Server 2022, x86_64); кросс-сборка из другой ОС запрещена. Toolchain: python.org CPython 3.14.8 (x64) с PyInstaller 6.22.3 и setuptools 84.0.0 по packaging/requirements-build.lock; SQLite-pin 3.50.4 — фактическая версия runtime из диагностического inventory-отчёта pending-target (FTS5 включён). native_build_verified=false: нативная сборка, изолированный smoke и выпускной гейт этого target ещё не выполнялись; пин не является приёмкой."
     },
     "macos-x86_64": {
       "python": "3.14.8",
       "pyinstaller": "6.22.3",
       "setuptools": "84.0.0",
-      "sqlite": null,
+      "sqlite": "3.50.4",
       "native_build_verified": false,
       "verified_on": null,
-      "note": "Нативная сборка не выполнялась (нет macOS-доступа); кросс-сборка запрещена. Проверка — задача 12 на runner macos-15-intel."
+      "note": "Сборка на runner macos-15-intel (macOS 15 Intel, x86_64); кросс-сборка запрещена. Toolchain: python.org CPython 3.14.8 (framework build) с PyInstaller 6.22.3 и setuptools 84.0.0 по packaging/requirements-build.lock; SQLite-pin 3.50.4 — фактическая версия runtime из диагностического inventory-отчёта pending-target (FTS5 включён). native_build_verified=false: нативная сборка, изолированный smoke и выпускной гейт этого target ещё не выполнялись; пин не является приёмкой."
     },
     "macos-arm64": {
       "python": "3.14.8",
       "pyinstaller": "6.22.3",
       "setuptools": "84.0.0",
-      "sqlite": null,
+      "sqlite": "3.50.4",
       "native_build_verified": false,
       "verified_on": null,
-      "note": "Нативная сборка не выполнялась (нет macOS-доступа); кросс-сборка запрещена. Проверка — задача 12 на runner macos-14."
+      "note": "Сборка на runner macos-14 (macOS 14 Apple Silicon, arm64); кросс-сборка запрещена. Toolchain: python.org CPython 3.14.8 (universal2/arm64) с PyInstaller 6.22.3 и setuptools 84.0.0 по packaging/requirements-build.lock; SQLite-pin 3.50.4 — фактическая версия runtime из диагностического inventory-отчёта pending-target (FTS5 включён). native_build_verified=false: нативная сборка, изолированный smoke и выпускной гейт этого target ещё не выполнялись; пин не является приёмкой."
     }
   }
 }

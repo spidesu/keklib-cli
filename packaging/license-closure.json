@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "notes": "Машинный licensing-гейт portable-сборки (tools/build_portable.py::verify_license_closure), схема 2 — статический контракт покрытия: components описывает компоненты (лицензия, файл уведомления под packaging/licenses/, строго булев distribution_ok), coverage сопоставляет относительные POSIX-пути (точные или fnmatch-шаблоны) одному компоненту ИЛИ набору компонентов — составной executable (собственный код + встроенный загрузчик PyInstaller) и составные модули расширений (CPython + статически вкомпилированные сторонние части: _decimal = CPython+libmpdec, _sha2/_sha3/_blake2 = CPython+HACL*, _hashlib/_ssl = CPython+OpenSSL) выражаются списком и требуют разрешения каждого включённого компонента. Гейт рекурсивно инвентаризирует фактическое дерево (исполнимый файл target, *.so*/*.dll/*.dylib/*.pyd на любой глубине, base_library.zip, файлы с ELF-magic) и требует однозначного покрытия каждой позиции; distribution_ok обязан быть JSON true (строки не принимаются); объявленные уведомления копируются в комплект. Неиспользуемые компоненты проверяться не обязаны. СОСТОЯНИЕ ПОСЛЕ NATIVE-ПРИЁМКИ 2026-10-18 (rootless-билдер Ubuntu 22.04, разрешение пользователя): закрытие Linux ЗАВЕРШЕНО по фактическому инвентарю принятой сборки linux-x86_64 — distribution_ok=true проставлено ровно компонентам фактического состава (собственный код; загрузчик PyInstaller с его исключением для упакованных приложений; CPython PSF-runtime; SQLite 3.54.1 public domain; OpenSSL 3.0.2 Apache-2.0; zlib; bzip2; XZ/liblzma; libffi; статически вкомпилированные libmpdec BSD-2 и HACL* MIT) с приложенными полными текстами уведомлений. Компоненты НЕ входящие в принятую сборку остаются false и блокируют комплект при появлении в инвентаре: readline-gpl (GPL-3.0 — сборка отключает readline конфигом и без dev-пакета), ncurses, zstd, brotli, expat (pyexpat/_elementtree в комплект не попадают; текст приложен на случай будущих сборок). Windows/macOS-сборки не выполнялись — их фактический состав не инвентаризировался, никаких заявлений о них манифест не делает (sqlite-pin этих target в toolchain.json остаётся null и блокирует их выпуск). Атрибуция: base_library.zip и lib-dynload — модули CPython (PSF), собранные PyInstaller; загрузчик PyInstaller встроен в исполнимый файл; libpython3.14.so.1.0 — CPython (PSF). Заполнять distribution_ok=true без инвентаризации фактического состава запрещено.",
+  "notes": "Машинный licensing-гейт portable-сборки (tools/build_portable.py::verify_license_closure), схема 2 — статический контракт покрытия: components описывает компоненты (лицензия, файл уведомления под packaging/licenses/, строго булев distribution_ok), coverage сопоставляет относительные POSIX-пути (точные или fnmatch-шаблоны) одному компоненту ИЛИ набору компонентов — составной executable (собственный код + встроенный загрузчик PyInstaller) и составные модули расширений (CPython + статически вкомпилированные сторонние части: _decimal = CPython+libmpdec, _sha2/_sha3/_blake2 = CPython+HACL*, _hashlib/_ssl = CPython+OpenSSL) выражаются списком и требуют разрешения каждого включённого компонента. Гейт рекурсивно инвентаризирует фактическое дерево (исполнимый файл target, *.so*/*.dll/*.dylib/*.pyd на любой глубине, base_library.zip, файлы с ELF-magic) и требует однозначного покрытия каждой позиции; distribution_ok обязан быть JSON true (строки не принимаются); объявленные уведомления копируются в комплект. Неиспользуемые компоненты проверяться не обязаны. СОСТОЯНИЕ ПОСЛЕ NATIVE-ПРИЁМКИ 2026-10-18 (rootless-билдер Ubuntu 22.04, разрешение пользователя): закрытие Linux ЗАВЕРШЕНО по фактическому инвентарю принятой сборки linux-x86_64 — distribution_ok=true проставлено ровно компонентам фактического состава (собственный код; загрузчик PyInstaller с его исключением для упакованных приложений; CPython PSF-runtime; SQLite 3.54.1 public domain; OpenSSL 3.0.2 Apache-2.0; zlib; bzip2; XZ/liblzma; libffi; статически вкомпилированные libmpdec BSD-2 и HACL* MIT) с приложенными полными текстами уведомлений. Компоненты НЕ входящие в принятую сборку остаются false и блокируют комплект при появлении в инвентаре: readline-gpl (GPL-3.0 — сборка отключает readline конфигом и без dev-пакета), ncurses, brotli. СОСТОЯНИЕ PENDING-TARGET (windows-x86_64/macos-x86_64/macos-arm64): фактический состав будущих комплектов известен из диагностических inventory-отчётов runtime python.org CPython 3.14.8 (native-прогоны инвентаризации на соответствующих runner'ах: полный список файлов bundle с provenance каждого бинаря, run SUCCESS 3/3); на этих фактах подготовлены platform-компоненты cpython-win-runtime/cpython-mac-runtime (PSF + для Windows условия Microsoft Distributable Code), ms-vcrt-python-dist, zlib-ng (статически в python314.dll), openssl-3.5.9, sqlite-3.50.4, xz-5.2.5, bzip2-1.0.8 (только windows: на mac bzip2 системный), libffi-3.4.4 (только windows), mpdecimal-4.0.0 (внешняя зависимость Windows-сборки), zstd (BSD-ветка по upstream-тексту), expat (pyexpat mac). Их distribution_ok=true — явное решение по фактическим текстам уведомлений и наблюдаемому составу, а НЕ приёмка: реальные нативные сборки и полные изолированные smoke этих target не выполнялись, каждый выпуск по-прежнему проверяется гейтом по фактическому дереву (неизвестный/непокрытый бинарь, включая системные/JDK DLL, блокирует выпуск). readline macOS — модуль линкуется к системной /usr/lib/libedit.3.dylib (не GNU readline, в комплекте не распространяется) и закрыт PSF-компонентом; появление реального GNU readline (libreadline.so*) блокируется readline-gpl на любой платформе. Заполнять distribution_ok=true без инвентаризации фактического состава запрещено.",
   "components": {
     "keklib-cli": {
       "license": "Proprietary (собственный код keklib-cli; условия распространения определяет владелец проекта)",
@@ -110,23 +110,83 @@
       "distribution_ok": true,
       "note": "HACL* (Copyright (c) 2016-2022 INRIA, CMU and Microsoft Corporation; 2022-2023 HACL* Contributors) vendored в исходнике CPython 3.14.8 (Modules/_hacl); MIT-текст извлечён из заголовков файлов того же pinned-исходника"
     },
-    "expat": {
-      "license": "MIT (Expat; vendored в исходнике CPython, pyexpat/_elementtree)",
-      "notice": "licenses/expat/COPYING.txt",
-      "distribution_ok": false,
-      "note": "в принятую сборку НЕ входит (pyexpat/_elementtree не попали в фактический инвентарь); текст приложен из Modules/expat/COPYING pinned-исходника на случай будущих составов"
-    },
     "zstd": {
-      "license": "BSD/GPLv2 dual (zstd)",
-      "notice": null,
-      "distribution_ok": false,
-      "note": "в принятую сборку не входит; выбор ветки лицензии фиксируется при фактической инвентаризации"
+      "license": "BSD-3-Clause (zstd; выбор ветки BSD из dual BSD/GPLv2 по фактическому upstream-тексту)",
+      "notice": "licenses/zstd/LICENSE.txt",
+      "distribution_ok": true,
+      "note": "Решение по фактическому составу native-target: runtime python.org CPython 3.14.8 поставляет zstd 1.5.7 (windows-x86_64 — статически в _zstd.pyd, macos — libzstd.1.dylib; версия подтверждена inventory-отчётами: текущая версия libzstd 1.5.7). Уведомление — LICENSE upstream-тега zstd-1.5.7 репозитория python/cpython-source-deps (официальное зеркало исходников сборки python.org), ветка BSD-3-Clause: binary-распространение разрешено с воспроизведением уведомления"
     },
     "brotli": {
       "license": "MIT (Brotli)",
       "notice": null,
       "distribution_ok": false,
       "note": "в принятую сборку не входит"
+    },
+    "cpython-win-runtime": {
+      "license": "Python Software Foundation License + Additional Conditions for this Windows binary build (python.org CPython 3.14.8 x64: python314.dll, модули .pyd, stdlib base_library.zip)",
+      "notice": "licenses/cpython-win/LICENSE.txt",
+      "distribution_ok": true,
+      "note": "Полный LICENSE.txt официального Windows-дистрибутива python.org 3.14.8 (PSF/BeOpen/CNRI/CWI + условия Microsoft Distributable Code + разделы bzip2 и libffi), SHA-256 935cf13e19f8c31b497d20b05d73623431a226b230c3599bc30fa3348979bc68; текст взят из runtime inventory-отчёта pending-target и побайтово сверен с python-3.14.8-embed-amd64.zip www.python.org (все .pyd/.dll runtime, кроме sqlite3.dll, побайтово совпали с этим дистрибутивом). Статически вкомпилированные сторонние части выделены отдельными компонентами и обязаны быть разрешены вместе: zlib-ng (в python314.dll), mpdecimal 4.0.0 (_decimal.pyd), xz (_lzma.pyd), bzip2 (_bz2.pyd), openssl (_hashlib/_ssl + libcrypto/libssl)"
+    },
+    "cpython-mac-runtime": {
+      "license": "Python Software Foundation License (python.org CPython 3.14.8 macOS framework: Python.framework/Versions/3.14/Python, модули lib-dynload, stdlib base_library.zip)",
+      "notice": "licenses/cpython-mac/LICENSE.txt",
+      "distribution_ok": true,
+      "note": "LICENSE.txt runtime python.org 3.14.8 macOS (PSF/BeOpen/CNRI/CWI; совпадает с PSF-частью Windows-текста), SHA-256 b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231; текст взят из runtime inventory-отчёта pending-target. Системные библиотеки macOS (/usr/lib/libz, libbz2, libffi, libedit, libSystem, фреймворки) линкуются динамически и в комплекте не распространяются. Статические части CPython (dtoa/getopt/cfuhash/qsbr/secret-labs — тот же исходник 3.14.8) и статические сторонние части (sqlite в _sqlite3, xz в _lzma, expat в pyexpat, libmpdec в _decimal, HACL* в _sha2/_sha3/_blake2/_md5/_sha1) выделены отдельными компонентами"
+    },
+    "ms-vcrt-python-dist": {
+      "license": "Microsoft Distributable Code — условия python.org Windows-сборки (VCRUNTIME140.dll, VCRUNTIME140_1.dll)",
+      "notice": "licenses/ms-vcrt/NOTICE.txt",
+      "distribution_ok": true,
+      "note": "Provenance только python.org: файлы VC Runtime распространяются как часть официального Windows-дистрибутива python.org 3.14.8 (побайтово сверены с python-3.14.8-embed-amd64.zip), условия — раздел «Additional Conditions for this Windows binary build» этого LICENSE.txt: разрешают дальнейшее распространение с соблюдением ограничений Microsoft (без изменения notice'ов, без товарных знаков Microsoft, только для платформ Microsoft). Комплект распространяет файлы без изменений; JDK/случайные системные DLL в состав не входят и лицензией не покрываются"
+    },
+    "zlib-ng": {
+      "license": "Zlib License (zlib-ng 2.2.4, статически в python314.dll; ZLIB_VERSION «1.3.1.zlib-ng»)",
+      "notice": "licenses/zlib-ng/LICENSE.md",
+      "distribution_ok": true,
+      "note": "Windows-сборка python.org CPython 3.14.8 использует zlib-ng (PCbuild/get_externals.bat: zlib-ng-2.2.4), zlib-модуля отдельным файлом в комплекте нет; LICENSE.md — upstream-тег zlib-ng-2.2.4 репозитория python/cpython-source-deps (оригинальная Zlib License, (C) 1995-2024 Jean-loup Gailly and Mark Adler)"
+    },
+    "openssl-3.5.9": {
+      "license": "Apache-2.0 (OpenSSL 3.5.9: windows-x86_64 — libcrypto-3.dll/libssl-3.dll + _hashlib/_ssl; macos — libcrypto.3.dylib/libssl.3.dylib + _hashlib/_ssl)",
+      "notice": "licenses/openssl/LICENSE-3.5.9.txt",
+      "distribution_ok": true,
+      "note": "OpenSSL 3.5.9 («OpenSSL 3.5.9 29 Sep 2026» в inventory-отчётах; PCbuild/get_externals.bat: openssl-3.5.9) из runtime python.org CPython 3.14.8. Полный текст Apache-2.0 — LICENSE.txt upstream-тега openssl-3.5.9 (репозиторий python/cpython-source-deps), побайтово равен LICENSE.txt официального исходного tarball openssl-3.5.9 с www.openssl.org; отдельного NOTICE-файла upstream 3.5.9 не поставляет (в корне исходника только LICENSE.txt)"
+    },
+    "sqlite-3.50.4": {
+      "license": "Public Domain (SQLite 3.50.4, FTS5)",
+      "notice": "licenses/sqlite/PUBLIC-DOMAIN.txt",
+      "distribution_ok": true,
+      "note": "SQLite 3.50.4 (VERSION 3.50.4.0) из runtime python.org CPython 3.14.8: windows-x86_64 — sqlite3.dll, macos — статическая амальгамация в _sqlite3. Уведомление — официальное заявление public domain sqlite.org/copyright.html. Примечание о происхождении: файлы .pyd/.dll runtime побайтово сверены с python-3.14.8-embed-amd64.zip, за исключением sqlite3.dll — байты инструментария hostedtoolcache отличаются от embed-архива при одинаковой версии 3.50.4.0 и размере, что зафиксировано честно и не влияет на public-domain-статус; финальная сборка проверяет фактический состав гейтом"
+    },
+    "xz-5.2.5": {
+      "license": "Public Domain (liblzma из XZ Utils 5.2.5, статически: windows-x86_64 — _lzma.pyd; macos — _lzma)",
+      "notice": "licenses/xz/COPYING-5.2.5.txt",
+      "distribution_ok": true,
+      "note": "«liblzma is in the public domain» — COPYING upstream-тега xz-5.2.5 репозитория python/cpython-source-deps (внешняя зависимость Windows-сборки python.org 3.14.8 по PCbuild/get_externals.bat; macOS-сборка python.org собирается из того же релиза CPython с той же версией xz). Отдельного файла liblzma в комплектах нет — библиотека статически внутри модуля"
+    },
+    "bzip2-1.0.8": {
+      "license": "BSD (bzip2 1.0.8, статически в windows _bz2.pyd)",
+      "notice": "licenses/bzip2/LICENSE-1.0.8.txt",
+      "distribution_ok": true,
+      "note": "Windows-сборка python.org статически компонует libbz2 1.0.8 (PCbuild/get_externals.bat: bzip2-1.0.8); раздел bzip2 включён и в LICENSE.txt дистрибутива. Уведомление — LICENSE upstream-тега bzip2-1.0.8 (python/cpython-source-deps). На macOS bzip2 — системная /usr/lib/libbz2.1.0.dylib и не распространяется"
+    },
+    "libffi-3.4.4": {
+      "license": "MIT (libffi 3.4.4; windows — libffi-8.dll)",
+      "notice": "licenses/libffi/LICENSE-3.4.4.txt",
+      "distribution_ok": true,
+      "note": "libffi-8.dll из runtime python.org CPython 3.14.8 Windows (PCbuild: libffi-3.4.4; побайтово сверен с python-3.14.8-embed-amd64.zip); MIT-текст — LICENSE upstream-тега libffi-3.4.4 (python/cpython-source-deps). На macOS _ctypes линкуется к системной /usr/lib/libffi.dylib и не распространяется"
+    },
+    "mpdecimal-4.0.0": {
+      "license": "BSD-2-Clause (libmpdec 4.0.0, статически в windows _decimal.pyd)",
+      "notice": "licenses/mpdecimal/COPYRIGHT-4.0.0.txt",
+      "distribution_ok": true,
+      "note": "Windows-сборка python.org компонует libmpdec из внешней зависимости mpdecimal-4.0.0 (PCbuild/get_externals.bat) — отличается от vendored 2.5.1 в исходнике (Linux-закрытие); COPYRIGHT.txt — upstream-тег mpdecimal-4.0.0 (python/cpython-source-deps). На macOS _decimal собирается из vendored libmpdec исходника CPython (компонент mpdecimal)"
+    },
+    "expat": {
+      "license": "MIT (Expat; vendored в исходнике CPython, pyexpat/_elementtree)",
+      "notice": "licenses/expat/COPYING.txt",
+      "distribution_ok": true,
+      "note": "в Linux-сборку не входит; на macOS (python.org framework) pyexpat с статически вкомпилированным vendored expat входит в фактический состав инвентаря pending-target — закрыто тем же уведомлением из Modules/expat/COPYING исходника CPython 3.14.8"
     }
   },
   "coverage": {
@@ -165,6 +225,92 @@
     "_internal/libffi.so*": "libffi",
     "_internal/libmpdec.so*": "mpdecimal",
     "_internal/libzstd.so*": "zstd",
-    "_internal/libbrotli*.so*": "brotli"
+    "_internal/libbrotli*.so*": "brotli",
+
+    "keklib-cli.exe": ["keklib-cli", "pyinstaller-bootloader"],
+    "_internal/python314.dll": [
+      "cpython-win-runtime",
+      "dtoa",
+      "getopt",
+      "cfuhash",
+      "qsbr",
+      "secret-labs",
+      "zlib-ng"
+    ],
+    "_internal/VCRUNTIME140.dll": "ms-vcrt-python-dist",
+    "_internal/VCRUNTIME140_1.dll": "ms-vcrt-python-dist",
+    "_internal/_bz2.pyd": ["cpython-win-runtime", "bzip2-1.0.8"],
+    "_internal/_ctypes.pyd": "cpython-win-runtime",
+    "_internal/_decimal.pyd": ["cpython-win-runtime", "mpdecimal-4.0.0"],
+    "_internal/_hashlib.pyd": ["cpython-win-runtime", "openssl-3.5.9"],
+    "_internal/_lzma.pyd": ["cpython-win-runtime", "xz-5.2.5"],
+    "_internal/_socket.pyd": "cpython-win-runtime",
+    "_internal/_sqlite3.pyd": "cpython-win-runtime",
+    "_internal/_ssl.pyd": ["cpython-win-runtime", "openssl-3.5.9"],
+    "_internal/_wmi.pyd": "cpython-win-runtime",
+    "_internal/_zstd.pyd": ["cpython-win-runtime", "zstd"],
+    "_internal/select.pyd": "cpython-win-runtime",
+    "_internal/unicodedata.pyd": "cpython-win-runtime",
+    "_internal/libcrypto-3.dll": "openssl-3.5.9",
+    "_internal/libssl-3.dll": "openssl-3.5.9",
+    "_internal/libffi-8.dll": "libffi-3.4.4",
+    "_internal/sqlite3.dll": "sqlite-3.50.4",
+
+    "_internal/Python.framework/Versions/3.14/Python": [
+      "cpython-mac-runtime",
+      "dtoa",
+      "getopt",
+      "cfuhash",
+      "qsbr",
+      "secret-labs"
+    ],
+    "_internal/libcrypto.3.dylib": "openssl-3.5.9",
+    "_internal/libssl.3.dylib": "openssl-3.5.9",
+    "_internal/libzstd.1.dylib": "zstd",
+    "_internal/python3.14/lib-dynload/_decimal.cpython-314-darwin.so": [
+      "cpython-mac-runtime",
+      "mpdecimal"
+    ],
+    "_internal/python3.14/lib-dynload/_sha2.cpython-314-darwin.so": [
+      "cpython-mac-runtime",
+      "hacl"
+    ],
+    "_internal/python3.14/lib-dynload/_sha3.cpython-314-darwin.so": [
+      "cpython-mac-runtime",
+      "hacl"
+    ],
+    "_internal/python3.14/lib-dynload/_blake2.cpython-314-darwin.so": [
+      "cpython-mac-runtime",
+      "hacl"
+    ],
+    "_internal/python3.14/lib-dynload/_md5.cpython-314-darwin.so": [
+      "cpython-mac-runtime",
+      "hacl"
+    ],
+    "_internal/python3.14/lib-dynload/_sha1.cpython-314-darwin.so": [
+      "cpython-mac-runtime",
+      "hacl"
+    ],
+    "_internal/python3.14/lib-dynload/_hashlib.cpython-314-darwin.so": [
+      "cpython-mac-runtime",
+      "openssl-3.5.9"
+    ],
+    "_internal/python3.14/lib-dynload/_ssl.cpython-314-darwin.so": [
+      "cpython-mac-runtime",
+      "openssl-3.5.9"
+    ],
+    "_internal/python3.14/lib-dynload/_sqlite3.cpython-314-darwin.so": [
+      "cpython-mac-runtime",
+      "sqlite-3.50.4"
+    ],
+    "_internal/python3.14/lib-dynload/_lzma.cpython-314-darwin.so": [
+      "cpython-mac-runtime",
+      "xz-5.2.5"
+    ],
+    "_internal/python3.14/lib-dynload/pyexpat.cpython-314-darwin.so": [
+      "cpython-mac-runtime",
+      "expat"
+    ],
+    "_internal/python3.14/lib-dynload/readline.cpython-314-darwin.so": "cpython-mac-runtime"
   }
 }

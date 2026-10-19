@@ -338,9 +338,16 @@ class ReportContractTests(unittest.TestCase):
             self.assertIn(key, report["runtime"])
             self.assertIn("available", report["runtime"][key])
 
-        # Preflight прошёл; нулевой SQLite-пин фиксируется как null, не выдумывается.
+        # Preflight прошёл; SQLite-пин pending-target зафиксирован в
+        # toolchain.json фактом инвентаризации (3.50.4 для всех трёх
+        # native-target) и попадает в отчёт как есть — null более не
+        # ожидается, но и не выдумывается: значение приходит из пина.
         self.assertIs(report["preflight"]["passed"], True)
-        self.assertIsNone(report["preflight"]["pins"]["sqlite"])
+        toolchain = json.loads(
+            (PROJECT_ROOT / "packaging" / "toolchain.json").read_text(encoding="utf-8")
+        )
+        expected_sqlite = toolchain["targets"][self.TARGET]["sqlite"]
+        self.assertEqual(report["preflight"]["pins"]["sqlite"], expected_sqlite)
         self.assertEqual(report["preflight"]["pins"]["python"], "3.14.8")
 
         # Фактические метаданные build-info пробрасываются как есть.
@@ -423,7 +430,10 @@ class ReportContractTests(unittest.TestCase):
             },
         )
         framework = libraries["_internal/Python.framework/Versions/3.14/Python"]
-        self.assertEqual(framework["recognized_by"], "full_walk_magic")
+        # Инвентарь сборки сам распознаёт extensionless Mach-O по magic:
+        # framework-runtime — часть контракта лицензионного инвентаря, а не
+        # только диагностическое дополнение полного обхода.
+        self.assertEqual(framework["recognized_by"], "library_inventory")
         self.assertIsInstance(framework["deps"], dict)
         self.assertIn("available", framework["deps"])
         for path in (

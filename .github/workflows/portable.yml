@@ -1,19 +1,36 @@
-# Portable-конвейер keklib-cli: нативные сборки четырёх target, изолированный
-# smoke без checkout исходников и выпускной гейт; только по workflow_dispatch.
+# Portable-конвейер keklib-cli: нативные сборки target, изолированный smoke
+# без checkout исходников и выпускной гейт; только по workflow_dispatch.
+#
+# Два режима (input scope, default all):
+# - all — полное выпускное поведение: все четыре target из
+#   packaging/targets.json, выпускной гейт, SHA256SUMS и verified-portable;
+# - windows-macos — подготовительный прогон только трёх native-target
+#   (Linux исключается по system из targets.json): build и обязательный
+#   изолированный smoke каждого target выполняются, но выпускной гейт НЕ
+#   запускается, SHA256SUMS/verified-portable не создаются — это не полная
+#   release-acceptance. Режим готовит Windows/macOS-комплекты к будущему
+#   полному выпуску и не заменяет его.
 #
 # Публичный GitHub Release и подписи не создаются — только проверенные
-# CI-артефакты и SHA256SUMS после успеха гейта.
+# CI-артефакты (и SHA256SUMS после успеха гейта в режиме all).
 #
-# ВАЖНО (честное поведение): у Windows/macOS SQLite-пин в
-# packaging/toolchain.json сейчас null (без выдуманных значений), поэтому их
-# сборки падают на release-гейте метаданных tools/build_portable.py, smoke и
-# итоговый гейт не выполняются, а конвейер красный. Это ожидаемо до реальной
-# нативной инвентаризации SQLite на этих target; никаких fake-pass нет.
+# SQLite-пины всех target заполнены в packaging/toolchain.json фактами
+# инвентаризации; native_build_verified=true только у linux-x86_64.
+# Никаких fake-pass: сборка любого target падает при нарушении гейтов.
 
 name: portable-release
 
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "Объём прогона: all — полный выпускной конвейер; windows-macos — подготовка трёх native-target без выпускного гейта"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - windows-macos
 
 permissions:
   contents: read
@@ -23,7 +40,9 @@ jobs:
   source-tests:
     uses: ./.github/workflows/ci.yml
 
-  # 2. Матрица target единственным источником — packaging/targets.json.
+  # 2. Матрица target единственным источником — packaging/targets.json;
+  #    scope только фильтрует её (windows-macos исключает Linux по system),
+  #    не добавляя собственных имён target.
   matrix:
     runs-on: ubuntu-24.04
     outputs:
@@ -37,16 +56,27 @@ jobs:
           python-version: "3.14"
       - name: Спецификации target
         id: specs
+        env:
+          SCOPE: ${{ inputs.scope }}
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
+          import os
           from pathlib import Path
 
           targets = json.loads(
               Path("packaging/targets.json").read_text(encoding="utf-8")
           )["targets"]
-          items = [{"name": name, "runner": spec["runner"]}
-                   for name, spec in targets.items()]
+          scope = os.environ.get("SCOPE") or "all"
+          if scope not in ("all", "windows-macos"):
+              raise SystemExit(f"неизвестный scope: {scope}")
+          items = [
+              {"name": name, "runner": spec["runner"]}
+              for name, spec in targets.items()
+              if scope == "all" or spec["system"] != "Linux"
+          ]
+          if not items:
+              raise SystemExit(f"scope {scope} не выбрал ни одного target")
           print("specs=" + json.dumps(items))
           PY
 
@@ -171,8 +201,11 @@ jobs:
 
   # 6. Выпускной гейт: все исходные тесты, все сборки, все smoke-отчёты,
   #    контрольные суммы четырёх архивов и SHA256SUMS — только после успеха.
+  #    Только в полном режиме (scope=all): подготовительный windows-macos —
+  #    не release-acceptance, гейт и его артефакты не создаются.
   gate:
     needs: [source-tests, matrix, build, smoke]
+    if: inputs.scope == 'all'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout (targets.json и tools/release_gate.py)

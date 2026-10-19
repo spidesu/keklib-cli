@@ -295,8 +295,26 @@ class LinuxNativeStateTests(unittest.TestCase):
         self.assertIsNotNone(linux["verified_on"])
         for other in ("windows-x86_64", "macos-x86_64", "macos-arm64"):
             entry = toolchain["targets"][other]
-            self.assertIsNone(entry["sqlite"], f"{other}: без выдуманных пинов")
+            # Pin заполнен только фактом диагностической инвентаризации
+            # runtime python.org 3.14.8 на нативных runner'ах (все три
+            # target показали SQLite 3.50.4 с FTS5), а не выдуман.
+            self.assertEqual(
+                entry["sqlite"], "3.50.4", f"{other}: pin по факту инвентаризации"
+            )
+            # Пин ≠ приёмка: реальные сборки/smoke этих target не выполнялись,
+            # выпуск по-прежнему блокируется до native build + full smoke.
             self.assertFalse(entry["native_build_verified"])
+            self.assertIsNone(entry["verified_on"])
+
+    def test_pending_target_notes_are_neutral(self) -> None:
+        """Notes pending-target не несут PII/путей scratch-окружения."""
+        toolchain = json.loads(
+            (PROJECT_ROOT / "packaging" / "toolchain.json").read_text(encoding="utf-8")
+        )
+        for other in ("windows-x86_64", "macos-x86_64", "macos-arm64"):
+            note = str(toolchain["targets"][other].get("note", ""))
+            for forbidden in (".superpowers", "/home/", "/tmp/", "C:\\", "spidesu"):
+                self.assertNotIn(forbidden, note, f"{other}: note содержит {forbidden!r}")
 
     def test_cleared_license_components_have_notices(self) -> None:
         manifest = json.loads(

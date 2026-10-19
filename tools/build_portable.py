@@ -473,20 +473,63 @@ def verify_release_metadata(
 # Лицензионный гейт по фактическому составу
 
 
+#: Mach-O magic (LE/BE, 32/64-bit) и FAT-контейнеры — тот же набор, что в
+#: диагностическом tools/inventory_runtime.py; лицензионный инвентарь сборки
+#: обязан видеть extensionless Mach-O (framework-runtime macOS вида
+#: ``_internal/Python.framework/Versions/3.14/Python``) сам, а не только в
+#: диагностическом отчёте.
+_MACHO_MAGICS = (
+    b"\xfe\xed\xfa\xce",
+    b"\xce\xfa\xed\xfe",
+    b"\xfe\xed\xfa\xcf",
+    b"\xcf\xfa\xed\xfe",
+    b"\xca\xfe\xba\xbe",
+    b"\xbe\xba\xfe\xca",
+)
+
+
+def _is_macho(head: bytes) -> bool:
+    return head[:4] in _MACHO_MAGICS
+
+
+def _is_pe(head: bytes) -> bool:
+    """PE-бинарь по полной сигнатуре «MZ + PE\\0\\0» (не только MZ)."""
+    if head[:2] != b"MZ" or len(head) < 0x40:
+        return False
+    (offset,) = struct.unpack_from("<I", head, 0x3C)
+    if offset < 0 or offset > len(head) - 4:
+        return False
+    return head[offset : offset + 4] == b"PE\x00\x00"
+
+
 def _library_like_file(entry: Path, name: str) -> bool:
-    """Библиотечный файл по расширению или ELF-magic (без расширения)."""
-    if fnmatch.fnmatch(name, "*.so") or fnmatch.fnmatch(name, "*.so.*"):
+    """Библиотечный файл по расширению (без учёта регистра) или binary-magic.
+
+    Расширения сопоставляются в нижнем регистре: реальные имена Windows-
+    состава регистрозависимы (``VCRUNTIME140.dll``, ``libcrypto-3.dll``, а
+    архиваторы не нормализуют регистр), и пропуск ``SOMELIB.DLL`` выпускал
+    бы binary без лицензионного покрытия. Безрасширенированные бинари
+    распознаются по magic аналогично ELF: Mach-O (все варианта magic,
+    включая FAT-контейнеры) и PE (``MZ`` + валидная PE-сигнатура). Файл с
+    DOS-magic ``MZ``, но без подтверждаемой PE-структуры тоже считается
+    binary (fail-closed): неизвестный бинарь обязан попасть в инвентарь и
+    блокировать выпуск без явного контракта, а не пропускаться молча.
+    """
+    lowered = name.lower()
+    if fnmatch.fnmatch(lowered, "*.so") or fnmatch.fnmatch(lowered, "*.so.*"):
         return True
-    if name.endswith((".dll", ".dylib", ".pyd")):
+    if lowered.endswith((".dll", ".dylib", ".pyd", ".exe")):
         return True
     if name == "base_library.zip":
         return True
     try:
         with entry.open("rb") as stream:
-            head = stream.read(4)
+            head = stream.read(0x40)
     except OSError:
         return False
-    return head == b"\x7fELF"
+    if head[:4] == b"\x7fELF" or _is_macho(head):
+        return True
+    return head[:2] == b"MZ"
 
 
 def inventory_identifier(relative: Path, name: str) -> str:
@@ -507,14 +550,17 @@ def inventory_bundle_libraries(bundle: Path, *, target: str) -> list[str]:
     нормализуются к `/` — см. ``inventory_identifier``). Обходится всё
     дерево: вложенные библиотеки (например `_internal/vendor/libx.so.1`)
     не могут быть пропущены. Учитываются: исполнимый файл target, общие
-    библиотеки и модули расширений по расширению (`.so*`/`.dll`/
-    `.dylib`/`.pyd`), `base_library.zip` и файлы с ELF-magic без
-    библиотечного расширения. Символические ссылки не разыменовываются:
-    их допустимость проверяет containment-гейт упаковки, а цель
-    учитывается в собственном месте дерева. Составные runtime (CPython:
-    libpython + lib-dynload + base_library.zip) и составной executable не
-    считаются автоматически закрытыми — их покрытие задаётся явным
-    контрактом манифеста (в т.ч. набором компонентов на один путь).
+    библиотеки, модули расширений и исполнимые файлы по расширению в
+    любом регистре (`.so*`/`.dll`/`.dylib`/`.pyd`/`.exe`), `base_library.zip`
+    и файлы с
+    binary-magic без библиотечного расширения — ELF, Mach-O (включая
+    FAT-контейнеры и extensionless framework-runtime macOS) и PE (`MZ`).
+    Символические ссылки не разыменовываются: их допустимость
+    проверяет containment-гейт упаковки, а цель учитывается в собственном
+    месте дерева. Составные runtime (CPython: libpython + lib-dynload +
+    base_library.zip) и составной executable не считаются автоматически
+    закрытыми — их покрытие задаётся явным контрактом манифеста
+    (в т.ч. набором компонентов на один путь).
     """
     executable = str(load_targets()[target]["executable"])
     names = {executable}
