@@ -935,9 +935,27 @@ overview-форму без журнала прогонов (правило — �
   отчётов против реального манифеста, неизвестный бинарь блокирует,
   libedit/GNU-readline различие, workflow all/частичный gate,
   Windows-license notices; ExistingBuilderTests актуализированы
-  предметно. Нативные сборки/smoke трёх target — следующий шаг
-  координатора (scope=windows-macos), `native_build_verified` остаются
-  false до полного выпуска. Отчёт —
+  предметно. **Fix round 1 review (F1–F3 + minors)**: F1 — Windows
+  `python314.dll` дополнен компонентом `hacl` (официальный
+  PCbuild/pythoncore.vcxproj v3.14.8 компилирует Hacl_Hash_* в core DLL)
+  с тестом копирования `licenses/hacl/LICENSE.txt` в Windows-комплект;
+  F2 — macOS-статические зависимости выделены по официальному recipe
+  Mac/BuildScript/build-installer.py v3.14.8: XZ 5.2.3 и системная
+  libmpdec 4.0.1 (`--with-system-libmpdec`, copyright 2008-2025) — новые
+  компоненты `xz-5.2.3`/`libmpdec-4.0.1` с upstream-текстами (bytereef
+  mpdecimal-4.0.1.tar.gz SHA-256 96d33abb…, tukaani-project/xz v5.2.3),
+  ложные переносы фактов между платформами убраны; inventory_runtime
+  добавил честные зонды `decimal.__libmpdec_version__` и ctypes-пробу
+  `lzma_version_string` образа модуля `_lzma` (null = не экспортирован)
+  для подтверждения следующим native-прогоном; F3 — общий шаблон
+  `_internal/python*/lib-dynload/*` удалён: coverage перечисляет все
+  фактические пути принятого Linux-выпуска (инвентарь принятого архива
+  a0d6eb6a…) и обоих macOS-отчётов, неизвестные потомки lib-dynload
+  (включая вложенный extensionless Mach-O) блокируются; minors — дубль
+  JSON-ключа `keklib-cli.exe` и мёртвый `_is_pe` удалены. Нативные
+  сборки/smoke трёх target — следующий шаг координатора
+  (scope=windows-macos), `native_build_verified` остаются false до
+  полного выпуска. Отчёт —
   `.superpowers/sdd/2026-02-11-keklib-cli-portable/native-closure-report.md`.
 
 Проверенные команды (текущий Linux, CachyOS glibc 2.44, CPython 3.14.8):

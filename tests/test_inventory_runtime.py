@@ -334,9 +334,29 @@ class ReportContractTests(unittest.TestCase):
         )
         self.assertIs(report["runtime"]["sqlite"]["fts5"], True)
         self.assertIsInstance(report["runtime"]["sqlite"]["compile_options"], list)
-        for key in ("openssl", "zlib", "libffi"):
+        for key in ("openssl", "zlib", "libffi", "decimal", "lzma"):
             self.assertIn(key, report["runtime"])
             self.assertIn("available", report["runtime"][key])
+        # F2: версии статических зависимостей, которые runtime-отчёты не
+        # измеряли, зондятся честно: decimal.__libmpdec_version__ (строка
+        # или null) и узкая ctypes-проба lzma_version_string образа самого
+        # модуля _lzma (строка или null — «не экспортирован», без догадок).
+        decimal_facts = report["runtime"]["decimal"]
+        self.assertIn("libmpdec_version", decimal_facts)
+        self.assertTrue(
+            decimal_facts["libmpdec_version"] is None
+            or isinstance(decimal_facts["libmpdec_version"], str)
+        )
+        lzma_facts = report["runtime"]["lzma"]
+        self.assertIn("liblzma_version", lzma_facts)
+        self.assertIn("probe", lzma_facts)
+        self.assertTrue(
+            lzma_facts["liblzma_version"] is None
+            or isinstance(lzma_facts["liblzma_version"], str)
+        )
+        # Стандартный модуль lzma не раскрывает версию liblzma константой —
+        # единственный источник факта узкая ctypes-проба (или честный null).
+        self.assertNotIn("module_version", lzma_facts)
 
         # Preflight прошёл; SQLite-пин pending-target зафиксирован в
         # toolchain.json фактом инвентаризации (3.50.4 для всех трёх

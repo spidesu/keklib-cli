@@ -492,14 +492,8 @@ def _is_macho(head: bytes) -> bool:
     return head[:4] in _MACHO_MAGICS
 
 
-def _is_pe(head: bytes) -> bool:
-    """PE-бинарь по полной сигнатуре «MZ + PE\\0\\0» (не только MZ)."""
-    if head[:2] != b"MZ" or len(head) < 0x40:
-        return False
-    (offset,) = struct.unpack_from("<I", head, 0x3C)
-    if offset < 0 or offset > len(head) - 4:
-        return False
-    return head[offset : offset + 4] == b"PE\x00\x00"
+def _is_macho(head: bytes) -> bool:
+    return head[:4] in _MACHO_MAGICS
 
 
 def _library_like_file(entry: Path, name: str) -> bool:
@@ -509,11 +503,11 @@ def _library_like_file(entry: Path, name: str) -> bool:
     состава регистрозависимы (``VCRUNTIME140.dll``, ``libcrypto-3.dll``, а
     архиваторы не нормализуют регистр), и пропуск ``SOMELIB.DLL`` выпускал
     бы binary без лицензионного покрытия. Безрасширенированные бинари
-    распознаются по magic аналогично ELF: Mach-O (все варианта magic,
-    включая FAT-контейнеры) и PE (``MZ`` + валидная PE-сигнатура). Файл с
-    DOS-magic ``MZ``, но без подтверждаемой PE-структуры тоже считается
-    binary (fail-closed): неизвестный бинарь обязан попасть в инвентарь и
-    блокировать выпуск без явного контракта, а не пропускаться молча.
+    распознаются по magic аналогично ELF: Mach-O (все варианты magic,
+    включая FAT-контейнеры) и PE — предикат принимает любой файл с
+    DOS-magic ``MZ`` (подтверждаемая PE-сигнатура не требуется): файл с
+    «MZ», но без полной PE-структуры — всё равно binary, гейт решает
+    явным покрытием, а не молчаливым пропуском (fail-closed).
     """
     lowered = name.lower()
     if fnmatch.fnmatch(lowered, "*.so") or fnmatch.fnmatch(lowered, "*.so.*"):

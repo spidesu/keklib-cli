@@ -99,10 +99,16 @@
       "note": "libffi8 3.4.2-4 (Ubuntu 22.04 baseline); уведомление — machine-readable copyright пакета из образа pinned digest"
     },
     "mpdecimal": {
-      "license": "BSD-2-Clause (libmpdec, статически вкомпилирован в _decimal)",
+      "license": "BSD-2-Clause (libmpdec 2.5.1, статически вкомпилирован в linux _decimal)",
       "notice": "licenses/mpdecimal/COPYING.txt",
       "distribution_ok": true,
-      "note": "libmpdec 2.5.1 vendored в исходнике CPython 3.14.8 (Modules/_decimal/libmpdec); уведомление извлечено из заголовка mpdecimal.h того же pinned-исходника; отдельной .so в комплекте нет"
+      "note": "libmpdec 2.5.1 vendored в исходнике CPython 3.14.8 (Modules/_decimal/libmpdec; используется сборкой из исходника — принятый linux-target); уведомление извлечено из заголовка mpdecimal.h того же pinned-исходника; отдельной .so в комплекте нет. macOS использует системную libmpdec 4.0.1 из recipe (компонент libmpdec-4.0.1), Windows — внешнюю 4.0.0 (компонент mpdecimal-4.0.0)"
+    },
+    "libmpdec-4.0.1": {
+      "license": "BSD-2-Clause (libmpdec 4.0.1, статически в macos _decimal)",
+      "notice": "licenses/mpdecimal/COPYRIGHT-4.0.1.txt",
+      "distribution_ok": true,
+      "note": "macOS-сборка python.org CPython 3.14.8 собирается по официальному recipe Mac/BuildScript/build-installer.py тега v3.14.8: зависимость «libmpdec 4.0.1» (строка 381) и конфигурация --with-system-libmpdec (строка 1161) — это НЕ vendored 2.5.1 и НЕ внешняя 4.0.0 Windows-сборки. COPYRIGHT.txt — из официального upstream-архива mpdecimal-4.0.1.tar.gz (bytereef.org, URL закреплён recipe; SHA-256 архива 96d33abb4bb0070c7be0fed4246cd38416188325f820468214471938545b1ac8) с обязательной строкой Copyright (c) 2008-2025 Stefan Krah. Честное ограничение: версия именно mac-runtime НЕ измерена runtime-отчётом — provenance установлен recipe; следующий native inventory подтвердит её фактом decimal.__libmpdec_version__ (inventory_runtime: runtime.decimal.libmpdec_version)"
     },
     "hacl": {
       "license": "MIT (HACL*; статически вкомпилирован в _sha2/_sha3/_blake2)",
@@ -132,7 +138,7 @@
       "license": "Python Software Foundation License (python.org CPython 3.14.8 macOS framework: Python.framework/Versions/3.14/Python, модули lib-dynload, stdlib base_library.zip)",
       "notice": "licenses/cpython-mac/LICENSE.txt",
       "distribution_ok": true,
-      "note": "LICENSE.txt runtime python.org 3.14.8 macOS (PSF/BeOpen/CNRI/CWI; совпадает с PSF-частью Windows-текста), SHA-256 b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231; текст взят из runtime inventory-отчёта pending-target. Системные библиотеки macOS (/usr/lib/libz, libbz2, libffi, libedit, libSystem, фреймворки) линкуются динамически и в комплекте не распространяются. Статические части CPython (dtoa/getopt/cfuhash/qsbr/secret-labs — тот же исходник 3.14.8) и статические сторонние части (sqlite в _sqlite3, xz в _lzma, expat в pyexpat, libmpdec в _decimal, HACL* в _sha2/_sha3/_blake2/_md5/_sha1) выделены отдельными компонентами"
+      "note": "LICENSE.txt runtime python.org 3.14.8 macOS (PSF/BeOpen/CNRI/CWI; совпадает с PSF-частью Windows-текста), SHA-256 b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231; текст взят из runtime inventory-отчёта pending-target. Системные библиотеки macOS (/usr/lib/libz, libbz2, libffi, libedit, libSystem, фреймворки) линкуются динамически и в комплекте не распространяются. Статические части CPython (dtoa/getopt/cfuhash/qsbr/secret-labs — тот же исходник 3.14.8) и статические сторонние части (sqlite в _sqlite3, xz 5.2.3 в _lzma, expat в pyexpat, системная libmpdec 4.0.1 в _decimal, HACL* в _sha2/_sha3/_blake2/_md5/_sha1) выделены отдельными компонентами; версии статических зависимостей закреплены официальным recipe Mac/BuildScript/build-installer.py v3.14.8, а не переносом фактов Windows/Linux"
     },
     "ms-vcrt-python-dist": {
       "license": "Microsoft Distributable Code — условия python.org Windows-сборки (VCRUNTIME140.dll, VCRUNTIME140_1.dll)",
@@ -159,10 +165,16 @@
       "note": "SQLite 3.50.4 (VERSION 3.50.4.0) из runtime python.org CPython 3.14.8: windows-x86_64 — sqlite3.dll, macos — статическая амальгамация в _sqlite3. Уведомление — официальное заявление public domain sqlite.org/copyright.html. Примечание о происхождении: файлы .pyd/.dll runtime побайтово сверены с python-3.14.8-embed-amd64.zip, за исключением sqlite3.dll — байты инструментария hostedtoolcache отличаются от embed-архива при одинаковой версии 3.50.4.0 и размере, что зафиксировано честно и не влияет на public-domain-статус; финальная сборка проверяет фактический состав гейтом"
     },
     "xz-5.2.5": {
-      "license": "Public Domain (liblzma из XZ Utils 5.2.5, статически: windows-x86_64 — _lzma.pyd; macos — _lzma)",
+      "license": "Public Domain (liblzma из XZ Utils 5.2.5, статически в windows _lzma.pyd)",
       "notice": "licenses/xz/COPYING-5.2.5.txt",
       "distribution_ok": true,
-      "note": "«liblzma is in the public domain» — COPYING upstream-тега xz-5.2.5 репозитория python/cpython-source-deps (внешняя зависимость Windows-сборки python.org 3.14.8 по PCbuild/get_externals.bat; macOS-сборка python.org собирается из того же релиза CPython с той же версией xz). Отдельного файла liblzma в комплектах нет — библиотека статически внутри модуля"
+      "note": "«liblzma is in the public domain» — COPYING upstream-тега xz-5.2.5 репозитория python/cpython-source-deps (внешняя зависимость ТОЛЬКО Windows-сборки python.org 3.14.8 по PCbuild/get_externals.bat; macOS использует XZ 5.2.3 — отдельный компонент xz-5.2.3). Отдельного файла liblzma в комплекте нет — библиотека статически внутри модуля"
+    },
+    "xz-5.2.3": {
+      "license": "Public Domain (liblzma из XZ Utils 5.2.3, статически в macos _lzma)",
+      "notice": "licenses/xz/COPYING-5.2.3.txt",
+      "distribution_ok": true,
+      "note": "macOS-сборка python.org CPython 3.14.8 собирается по официальному recipe Mac/BuildScript/build-installer.py тега v3.14.8, который закрепляет зависимость «XZ 5.2.3» (строка 317, http://tukaani.org/xz/xz-5.2.3.tar.gz). Уведомление — COPYING официального upstream-зеркала tukaani-project/xz (тег v5.2.3; прямая загрузка tukaani.org закрыта bot-защитой); текст отличается от 5.2.5 только схемой URL. Честное ограничение: версия liblzma именно mac-runtime НЕ измерена runtime-отчётом (в составе нет отдельной dylib, зависимость статическая) — provenance установлен recipe; следующий native inventory подтвердит её узкой ctypes-пробой lzma_version_string образа модуля _lzma (inventory_runtime: runtime.lzma.liblzma_version)"
     },
     "bzip2-1.0.8": {
       "license": "BSD (bzip2 1.0.8, статически в windows _bz2.pyd)",
@@ -180,7 +192,7 @@
       "license": "BSD-2-Clause (libmpdec 4.0.0, статически в windows _decimal.pyd)",
       "notice": "licenses/mpdecimal/COPYRIGHT-4.0.0.txt",
       "distribution_ok": true,
-      "note": "Windows-сборка python.org компонует libmpdec из внешней зависимости mpdecimal-4.0.0 (PCbuild/get_externals.bat) — отличается от vendored 2.5.1 в исходнике (Linux-закрытие); COPYRIGHT.txt — upstream-тег mpdecimal-4.0.0 (python/cpython-source-deps). На macOS _decimal собирается из vendored libmpdec исходника CPython (компонент mpdecimal)"
+      "note": "Windows-сборка python.org компонует libmpdec из внешней зависимости mpdecimal-4.0.0 (PCbuild/get_externals.bat) — отличается от vendored 2.5.1 в исходнике (linux) и от системной 4.0.1 macOS-recipe (компонент libmpdec-4.0.1); COPYRIGHT.txt — upstream-тег mpdecimal-4.0.0 (python/cpython-source-deps)"
     },
     "expat": {
       "license": "MIT (Expat; vendored в исходнике CPython, pyexpat/_elementtree)",
@@ -191,7 +203,6 @@
   },
   "coverage": {
     "keklib-cli": ["keklib-cli", "pyinstaller-bootloader"],
-    "keklib-cli.exe": ["keklib-cli", "pyinstaller-bootloader"],
     "_internal/base_library.zip": "cpython-runtime",
     "_internal/libpython*.so*": [
       "cpython-runtime",
@@ -201,15 +212,6 @@
       "qsbr",
       "secret-labs"
     ],
-    "_internal/python*/lib-dynload/*": "cpython-runtime",
-    "_internal/python3.14/lib-dynload/_decimal.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "mpdecimal"],
-    "_internal/python3.14/lib-dynload/_sha2.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
-    "_internal/python3.14/lib-dynload/_sha3.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
-    "_internal/python3.14/lib-dynload/_blake2.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
-    "_internal/python3.14/lib-dynload/_md5.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
-    "_internal/python3.14/lib-dynload/_sha1.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
-    "_internal/python3.14/lib-dynload/_hashlib.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "openssl"],
-    "_internal/python3.14/lib-dynload/_ssl.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "openssl"],
     "_internal/libsqlite3.so*": "sqlite",
     "_internal/libsqlite3.dll": "sqlite",
     "_internal/libcrypto.so*": "openssl",
@@ -235,7 +237,8 @@
       "cfuhash",
       "qsbr",
       "secret-labs",
-      "zlib-ng"
+      "zlib-ng",
+      "hacl"
     ],
     "_internal/VCRUNTIME140.dll": "ms-vcrt-python-dist",
     "_internal/VCRUNTIME140_1.dll": "ms-vcrt-python-dist",
@@ -267,50 +270,87 @@
     "_internal/libcrypto.3.dylib": "openssl-3.5.9",
     "_internal/libssl.3.dylib": "openssl-3.5.9",
     "_internal/libzstd.1.dylib": "zstd",
-    "_internal/python3.14/lib-dynload/_decimal.cpython-314-darwin.so": [
-      "cpython-mac-runtime",
-      "mpdecimal"
-    ],
-    "_internal/python3.14/lib-dynload/_sha2.cpython-314-darwin.so": [
-      "cpython-mac-runtime",
-      "hacl"
-    ],
-    "_internal/python3.14/lib-dynload/_sha3.cpython-314-darwin.so": [
-      "cpython-mac-runtime",
-      "hacl"
-    ],
-    "_internal/python3.14/lib-dynload/_blake2.cpython-314-darwin.so": [
-      "cpython-mac-runtime",
-      "hacl"
-    ],
-    "_internal/python3.14/lib-dynload/_md5.cpython-314-darwin.so": [
-      "cpython-mac-runtime",
-      "hacl"
-    ],
-    "_internal/python3.14/lib-dynload/_sha1.cpython-314-darwin.so": [
-      "cpython-mac-runtime",
-      "hacl"
-    ],
-    "_internal/python3.14/lib-dynload/_hashlib.cpython-314-darwin.so": [
-      "cpython-mac-runtime",
-      "openssl-3.5.9"
-    ],
-    "_internal/python3.14/lib-dynload/_ssl.cpython-314-darwin.so": [
-      "cpython-mac-runtime",
-      "openssl-3.5.9"
-    ],
-    "_internal/python3.14/lib-dynload/_sqlite3.cpython-314-darwin.so": [
-      "cpython-mac-runtime",
-      "sqlite-3.50.4"
-    ],
-    "_internal/python3.14/lib-dynload/_lzma.cpython-314-darwin.so": [
-      "cpython-mac-runtime",
-      "xz-5.2.5"
-    ],
-    "_internal/python3.14/lib-dynload/pyexpat.cpython-314-darwin.so": [
-      "cpython-mac-runtime",
-      "expat"
-    ],
-    "_internal/python3.14/lib-dynload/readline.cpython-314-darwin.so": "cpython-mac-runtime"
+
+    "_internal/python3.14/lib-dynload/_decimal.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "mpdecimal"],
+    "_internal/python3.14/lib-dynload/_sha2.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_sha3.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_blake2.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_md5.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_sha1.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_hashlib.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "openssl"],
+    "_internal/python3.14/lib-dynload/_ssl.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "openssl"],
+    "_internal/python3.14/lib-dynload/array.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/binascii.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_bisect.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_bz2.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_codecs_cn.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_codecs_hk.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_codecs_iso2022.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_codecs_jp.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_codecs_kr.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_codecs_tw.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_csv.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_ctypes.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/fcntl.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/grp.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_heapq.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_json.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_lzma.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/math.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_multibytecodec.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_pickle.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_posixsubprocess.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_random.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/resource.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/select.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_socket.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_sqlite3.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_statistics.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_struct.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/unicodedata.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/zlib.cpython-314-x86_64-linux-gnu.so": "cpython-runtime",
+
+    "_internal/python3.14/lib-dynload/_decimal.cpython-314-darwin.so": ["cpython-mac-runtime", "libmpdec-4.0.1"],
+    "_internal/python3.14/lib-dynload/_sha2.cpython-314-darwin.so": ["cpython-mac-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_sha3.cpython-314-darwin.so": ["cpython-mac-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_blake2.cpython-314-darwin.so": ["cpython-mac-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_md5.cpython-314-darwin.so": ["cpython-mac-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_sha1.cpython-314-darwin.so": ["cpython-mac-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_hashlib.cpython-314-darwin.so": ["cpython-mac-runtime", "openssl-3.5.9"],
+    "_internal/python3.14/lib-dynload/_ssl.cpython-314-darwin.so": ["cpython-mac-runtime", "openssl-3.5.9"],
+    "_internal/python3.14/lib-dynload/_sqlite3.cpython-314-darwin.so": ["cpython-mac-runtime", "sqlite-3.50.4"],
+    "_internal/python3.14/lib-dynload/_lzma.cpython-314-darwin.so": ["cpython-mac-runtime", "xz-5.2.3"],
+    "_internal/python3.14/lib-dynload/pyexpat.cpython-314-darwin.so": ["cpython-mac-runtime", "expat"],
+    "_internal/python3.14/lib-dynload/readline.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_bisect.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_bz2.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_codecs_cn.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_codecs_hk.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_codecs_iso2022.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_codecs_jp.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_codecs_kr.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_codecs_tw.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_csv.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_ctypes.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_heapq.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_json.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_multibytecodec.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_pickle.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_posixsubprocess.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_random.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_scproxy.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_socket.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_statistics.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_struct.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/_zstd.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/array.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/binascii.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/fcntl.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/grp.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/math.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/resource.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/select.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/unicodedata.cpython-314-darwin.so": "cpython-mac-runtime",
+    "_internal/python3.14/lib-dynload/zlib.cpython-314-darwin.so": "cpython-mac-runtime"
   }
 }

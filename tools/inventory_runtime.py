@@ -157,6 +157,65 @@ def runtime_facts() -> dict[str, object]:
             "runtime_version": zlib.ZLIB_RUNTIME_VERSION,
         }
 
+    # F2 (review native-closure): версии статических зависимостей, на
+    # которых перенос фактов между платформами невозможен, зондятся
+    # честно. decimal.__libmpdec_version__ — публичный факт модуля
+    # (None записывается явно, если модуль его не раскрывает). liblzma —
+    # узкая ctypes-проба образа САМОГО модуля _lzma (символ
+    # lzma_version_string): статическая компоновка macOS экспортирует его
+    # из модуля, динамическая линковка Linux — нет; None означает
+    # «не экспортирован из образа модуля», без догадок и без поиска по
+    # process-wide dlopen.
+    try:
+        import decimal as _decimal
+    except ImportError:  # pragma: no cover - дефектный runtime
+        decimal_facts = {"available": False, "libmpdec_version": None}
+    else:
+        decimal_facts = {
+            "available": True,
+            "libmpdec_version": getattr(_decimal, "__libmpdec_version__", None),
+        }
+
+    def _lzma_lib_version() -> str | None:
+        try:
+            import _lzma as _lzma_module
+        except ImportError:  # pragma: no cover - дефектный runtime
+            return None
+        module_file = getattr(_lzma_module, "__file__", None)
+        if not module_file or not str(module_file).endswith(
+            (".so", ".pyd", ".dll", ".dylib")
+        ):
+            return None
+        try:
+            import ctypes
+
+            image = ctypes.CDLL(str(module_file))
+            function = getattr(image, "lzma_version_string", None)
+            if function is None:
+                return None
+            function.restype = ctypes.c_char_p
+            value = function()
+        except (OSError, AttributeError):
+            return None
+        if not isinstance(value, bytes):
+            return None
+        return value.decode("utf-8", "replace").strip() or None
+
+    try:
+        import _lzma as _lzma_module  # noqa: F401 - факт доступности
+    except ImportError:  # pragma: no cover - дефектный runtime
+        lzma_facts = {
+            "available": False,
+            "liblzma_version": None,
+            "probe": None,
+        }
+    else:
+        lzma_facts = {
+            "available": True,
+            "liblzma_version": _lzma_lib_version(),
+            "probe": "ctypes lzma_version_string из образа модуля _lzma",
+        }
+
     libffi = {
         "available": importlib.util.find_spec("_ctypes") is not None,
         # Стандартная библиотека не раскрывает версию libffi — поле явно
@@ -178,6 +237,8 @@ def runtime_facts() -> dict[str, object]:
         },
         "openssl": openssl,
         "zlib": zlib_facts,
+        "decimal": decimal_facts,
+        "lzma": lzma_facts,
         "libffi": libffi,
     }
 

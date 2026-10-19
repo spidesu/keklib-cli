@@ -87,9 +87,11 @@ macOS 14 Apple Silicon; SQLite 3.50.4 с FTS5, OpenSSL 3.5.9). На этих
   условия Microsoft Distributable Code этого дистрибутива
   (`licenses/cpython-win/LICENSE.txt`,
   `licenses/ms-vcrt/NOTICE.txt` — VCRUNTIME140*.dll); статически
-  вкомпилированные zlib-ng 2.2.4 (Zlib License), libmpdec 4.0.0 (BSD-2),
-  liblzma из XZ Utils 5.2.5 (public domain), bzip2 1.0.8 (BSD) —
-  `licenses/zlib-ng/`, `licenses/mpdecimal/COPYRIGHT-4.0.0.txt`,
+  вкомпилированные zlib-ng 2.2.4 (Zlib License), HACL* (MIT — hash-модули
+  Windows встроены в core DLL официальным PCbuild/pythoncore),
+  libmpdec 4.0.0 (BSD-2), liblzma из XZ Utils 5.2.5 (public domain),
+  bzip2 1.0.8 (BSD) — `licenses/zlib-ng/`, `licenses/hacl/LICENSE.txt`,
+  `licenses/mpdecimal/COPYRIGHT-4.0.0.txt`,
   `licenses/xz/COPYING-5.2.5.txt`, `licenses/bzip2/LICENSE-1.0.8.txt`;
   отдельные `libcrypto-3.dll`/`libssl-3.dll` (OpenSSL 3.5.9,
   Apache-2.0), `sqlite3.dll` (SQLite 3.50.4, public domain),
@@ -98,12 +100,19 @@ macOS 14 Apple Silicon; SQLite 3.50.4 с FTS5, OpenSSL 3.5.9). На этих
   DLL Windows (api-ms-*, ucrtbase, JDK-библиотеки) в комплект не входят
   и появлением блокируют выпуск.
 - **macos-x86_64 / macos-arm64** (framework-сборка python.org
-  CPython 3.14.8): CPython PSF (`licenses/cpython-mac/LICENSE.txt`);
-  статические части исходника CPython — dtoa/getopt/cfuhash/qsbr/
-  Secret Labs, libmpdec 2.5.1, HACL*, а также статически вкомпилированные
-  SQLite 3.50.4, liblzma (XZ Utils 5.2.5), Expat (MIT); отдельные
-  `libcrypto.3.dylib`/`libssl.3.dylib` (OpenSSL 3.5.9) и
-  `libzstd.1.dylib` (zstd 1.5.7, BSD-3). Системные библиотеки macOS
+  CPython 3.14.8 по официальному recipe Mac/BuildScript): CPython PSF
+  (`licenses/cpython-mac/LICENSE.txt`); статические части исходника
+  CPython — dtoa/getopt/cfuhash/qsbr/Secret Labs, HACL* (MIT), а также
+  статически вкомпилированные SQLite 3.50.4 (public domain), liblzma из
+  XZ Utils 5.2.3 (public domain — зависимость recipe), системная
+  libmpdec 4.0.1 (BSD-2, `--with-system-libmpdec`,
+  `licenses/mpdecimal/COPYRIGHT-4.0.1.txt` с copyright 2008-2025) и
+  Expat (MIT); отдельные `libcrypto.3.dylib`/`libssl.3.dylib`
+  (OpenSSL 3.5.9) и `libzstd.1.dylib` (zstd 1.5.7, BSD-3). Версии XZ и
+  libmpdec закреплены официальным recipe сборки python.org, а не
+  переносом фактов Windows/Linux; их подтверждение runtime-зондами
+  (`decimal.__libmpdec_version__`, ctypes-проба `lzma_version_string`)
+  выполняется нативной инвентаризацией. Системные библиотеки macOS
   (`libz`, `libbz2`, `libffi`, `libSystem`, `libedit`, фреймворки)
   линкуются динамически и в комплекте не распространяются. Модуль
   `readline` macOS использует системную `libedit` (не GNU Readline);
