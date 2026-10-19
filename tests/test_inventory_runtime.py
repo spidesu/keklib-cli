@@ -96,6 +96,10 @@ def _fake_bundle(dist: Path, executable: str) -> None:
     (internal / "base_library.zip").write_bytes(buffer.getvalue())
     (internal / "sqlite3.dll").write_bytes(_fake_pe_bytes())
     (internal / "_sha2.pyd").write_bytes(_fake_pe_bytes())
+    # Extensionless Mach-O: framework-runtime macOS вида Python.framework.
+    framework = internal / "Python.framework" / "Versions" / "3.14"
+    framework.mkdir(parents=True)
+    (framework / "Python").write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 64)
 
 
 def _write_collect_toc(work: Path, entries: list[tuple[str, str, str]]) -> None:
@@ -106,13 +110,20 @@ def _write_collect_toc(work: Path, entries: list[tuple[str, str, str]]) -> None:
 
 @contextlib.contextmanager
 def patched_stages(fake_toc: list[tuple[str, str, str]] | None = None):
-    """Патч тяжёлых стадий на контракты; фикстура комплекта создаётся сама."""
+    """Патч тяжёлых стадий на контракты; фикстура комплекта создаётся сама.
+
+    TOC пишется во вложенный workdir ``<work>/keklib-cli`` — фактический
+    layout закреплённого PyInstaller (``workpath = join(workpath,
+    specnm)``), с реальными формами dest COLLECT: EXECUTABLE в корне
+    комплекта, остальные назначения относительно ``_internal/`` без
+    самого префикса.
+    """
     executable = "keklib-cli.exe"
 
     def fake_pyinstaller(distpath: Path, workpath: Path) -> None:
         _fake_bundle(Path(distpath), executable)
         if fake_toc is not None:
-            _write_collect_toc(Path(workpath), fake_toc)
+            _write_collect_toc(Path(workpath) / "keklib-cli", fake_toc)
 
     with contextlib.ExitStack() as stack:
         for patch in (
@@ -275,13 +286,14 @@ class ReportContractTests(unittest.TestCase):
         targets = PROJECT_ROOT / "packaging" / "targets.json"
         self.targets_before = targets.read_bytes()
         self.toc = [
-            (
-                "_internal/base_library.zip",
-                "/opt/hostedtoolcache/base_library.zip",
-                "BINARY",
-            ),
-            ("_internal/sqlite3.dll", "/opt/hostedtoolcache/sqlite3.dll", "BINARY"),
+            # Реальные формы dest COLLECT: EXECUTABLE в корне комплекта,
+            # остальные — относительно _internal/ без префикса. Запись
+            # collide/_sha2.pyd провоцирует коллизию basename с
+            # _internal/_sha2.pyd: неоднозначный fallback запрещён.
+            ("base_library.zip", "/opt/hostedtoolcache/base_library.zip", "BINARY"),
+            ("sqlite3.dll", "/opt/hostedtoolcache/sqlite3.dll", "BINARY"),
             ("keklib-cli.exe", "/opt/hostedtoolcache/keklib-cli.exe", "EXECUTABLE"),
+            ("collide/_sha2.pyd", "/opt/other/_sha2.pyd", "BINARY"),
         ]
 
     def test_report_contract(self):
@@ -341,6 +353,7 @@ class ReportContractTests(unittest.TestCase):
                 "_internal/base_library.zip",
                 "_internal/sqlite3.dll",
                 "_internal/_sha2.pyd",
+                "_internal/Python.framework/Versions/3.14/Python",
             },
         )
         for entry in files.values():
@@ -355,7 +368,9 @@ class ReportContractTests(unittest.TestCase):
             hashlib.sha256(buffer.getvalue()).hexdigest(),
         )
 
-        # Инвентарь библиотек: переиспользованный состав + provenance TOC.
+        # Библиотечный инвентарь (переиспользованный) дополнен нативными
+        # бинарями полного обхода по magic: extensionless Mach-O framework
+        # runtime получает записи deps/provenance наравне с остальными.
         libraries = {item["path"]: item for item in report["libraries"]}
         self.assertEqual(
             set(libraries),
@@ -364,15 +379,43 @@ class ReportContractTests(unittest.TestCase):
                 "_internal/base_library.zip",
                 "_internal/sqlite3.dll",
                 "_internal/_sha2.pyd",
+                "_internal/Python.framework/Versions/3.14/Python",
             },
         )
+        framework = libraries["_internal/Python.framework/Versions/3.14/Python"]
+        self.assertEqual(framework["recognized_by"], "full_walk_magic")
+        self.assertIsInstance(framework["deps"], dict)
+        self.assertIn("available", framework["deps"])
+        for path in (
+            "keklib-cli.exe",
+            "_internal/base_library.zip",
+            "_internal/sqlite3.dll",
+            "_internal/_sha2.pyd",
+        ):
+            self.assertEqual(
+                libraries[path]["recognized_by"],
+                "library_inventory",
+                f"{path} закрывается переиспользованным библиотечным инвентарём",
+            )
+
+        # Provenance по правилам COLLECT: точное имя в корне, префикс
+        # _internal/ отбрасывается у остальных; неоднозначный basename
+        # (collide/_sha2.pyd) не подставляет чужой источник.
         self.assertEqual(
             libraries["_internal/sqlite3.dll"]["toc_source"],
             {
-                "dest": "_internal/sqlite3.dll",
+                "dest": "sqlite3.dll",
                 "src": "/opt/hostedtoolcache/sqlite3.dll",
                 "typecode": "BINARY",
             },
+        )
+        self.assertEqual(
+            libraries["_internal/base_library.zip"]["toc_source"]["dest"],
+            "base_library.zip",
+        )
+        self.assertEqual(
+            libraries["keklib-cli.exe"]["toc_source"]["dest"],
+            "keklib-cli.exe",
         )
         self.assertIsNone(libraries["_internal/_sha2.pyd"]["toc_source"])
         for item in libraries.values():
@@ -543,6 +586,71 @@ class CollectTocTests(unittest.TestCase):
             mapping["_internal/sqlite3.dll"]["typecode"], "BINARY"
         )
 
+    def test_toc_searched_in_spec_nested_workdir(self):
+        """R1: закреплённый PyInstaller кладёт TOC в <work>/<specnm>.
+
+        ``build_main`` добавляет имя spec к workpath
+        (``workpath = join(workpath, specnm)``); поиск только в корне
+        workpath возвращал пустой словарь и терял provenance целиком.
+        """
+        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        self.addCleanup(lambda: _rmtree(staging))
+        _write_collect_toc(
+            staging / "keklib-cli",
+            [("_internal/x.so", "/cache/x.so", "BINARY")],
+        )
+        mapping = ir.collect_toc_sources(staging)
+        self.assertEqual(mapping["_internal/x.so"]["src"], "/cache/x.so")
+
+    def test_contents_prefix_and_exact_root_matching(self):
+        """R1: dest EXECUTABLE — точное имя в корне, прочие — без _internal/.
+
+        Правила COLLECT: исполняемый файл попадает в корень комплекта,
+        остальные назначения относительно contents-каталога ``_internal/``
+        (самого префикса в dest нет) — сопоставление обязано учитывать
+        обе формы.
+        """
+        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        self.addCleanup(lambda: _rmtree(staging))
+        _write_collect_toc(
+            staging,
+            [
+                ("sqlite3.dll", "/cache/sqlite3.dll", "BINARY"),
+                ("lib-dynload/_sqlite3.so", "/cache/_sqlite3.so", "EXTENSION"),
+                ("keklib-cli", "/cache/keklib-cli", "EXECUTABLE"),
+            ],
+        )
+        mapping = ir.collect_toc_sources(staging)
+        dll = ir._provenance_for("_internal/sqlite3.dll", mapping)
+        self.assertIsNotNone(dll)
+        assert dll is not None
+        self.assertEqual(dll["dest"], "sqlite3.dll")
+        ext = ir._provenance_for(
+            "_internal/lib-dynload/_sqlite3.so", mapping
+        )
+        self.assertIsNotNone(ext)
+        assert ext is not None
+        self.assertEqual(ext["src"], "/cache/_sqlite3.so")
+        exe = ir._provenance_for("keklib-cli", mapping)
+        self.assertIsNotNone(exe)
+        assert exe is not None
+        self.assertEqual(exe["typecode"], "EXECUTABLE")
+
+    def test_no_ambiguous_basename_fallback(self):
+        """R1: одинаковый basename в другом каталоге — не источник.
+
+        fallback по basename подставил бы чужой src при коллизии имён;
+        неподтверждённый provenance обязан быть null, а не угаданным.
+        """
+        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        self.addCleanup(lambda: _rmtree(staging))
+        _write_collect_toc(
+            staging,
+            [("collide/_sha2.pyd", "/other/_sha2.pyd", "BINARY")],
+        )
+        mapping = ir.collect_toc_sources(staging)
+        self.assertIsNone(ir._provenance_for("_internal/_sha2.pyd", mapping))
+
     def test_malformed_toc_ignored(self):
         staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
         self.addCleanup(lambda: _rmtree(staging))
@@ -705,6 +813,94 @@ class PlatformInventoryWorkflowTests(unittest.TestCase):
     def test_native_python_invocation_uniform(self):
         self.assertNotIn("python3 ", self.TEXT)
         self.assertNotIn("py -3", self.TEXT)
+
+
+class PeVersionInfoTests(unittest.TestCase):
+    """R2: фактическая форма pefile API — FileInfo=[[StringFileInfo]], bytes.
+
+    Реалистичный контракт (проверен review на pinned API): строки
+    VERSION-ресурсов лежат во вложенных списках структур, ключи/значения
+    ``StringTable.entries`` — bytes. Подмена модуля — контрактный мок,
+    не нативная проверка Windows.
+    """
+
+    def _fake_pefile_module(self):
+        import types
+
+        class _ImportEntry:
+            def __init__(self, dll: bytes) -> None:
+                self.dll = dll
+
+        class _StringTable:
+            def __init__(self, entries: dict) -> None:
+                self.entries = entries
+
+        class _StringFileInfo:
+            def __init__(self, tables: list) -> None:
+                self.StringTable = tables
+
+        class _PE:
+            DIRECTORY_ENTRY_IMPORT = [_ImportEntry(b"SYSTEM32\\SQLITE3.dll")]
+            FileInfo = [
+                [
+                    _StringFileInfo(
+                        [
+                            _StringTable(
+                                {
+                                    b"FileVersion": b"3.45.6",
+                                    b"ProductName": b"SQLite",
+                                    b"LegalCopyright": b"public domain",
+                                }
+                            )
+                        ]
+                    )
+                ]
+            ]
+
+            def __init__(self, name: str, fast_load: bool = True) -> None:
+                pass
+
+            def parse_data_directories(self, directories=None) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        module = types.ModuleType("pefile")
+        module.PE = _PE
+        module.DIRECTORY_ENTRY = {
+            "IMAGE_DIRECTORY_ENTRY_IMPORT": 1,
+            "IMAGE_DIRECTORY_ENTRY_RESOURCE": 2,
+        }
+        return module
+
+    def test_nested_stringfileinfo_bytes_extracted(self):
+        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        self.addCleanup(lambda: _rmtree(staging))
+        target = staging / "sqlite3.dll"
+        target.write_bytes(_fake_pe_bytes())
+        with mock.patch.dict(sys.modules, {"pefile": self._fake_pefile_module()}):
+            result = ir.pe_deps(target)
+        self.assertIs(result["available"], True)
+        self.assertEqual(result["imports"], ["SYSTEM32\\SQLITE3.dll"])
+        self.assertIsNotNone(result["version_info"])
+        version = result["version_info"]
+        assert version is not None
+        self.assertEqual(version["file_version"], "3.45.6")
+        self.assertEqual(version["product_name"], "SQLite")
+        self.assertEqual(version["strings"]["LegalCopyright"], "public domain")
+
+    def test_version_info_null_when_no_resources(self):
+        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        self.addCleanup(lambda: _rmtree(staging))
+        target = staging / "plain.dll"
+        target.write_bytes(_fake_pe_bytes())
+        module = self._fake_pefile_module()
+        module.PE.FileInfo = []  # ресурсов нет — честный null, не выдумка
+        with mock.patch.dict(sys.modules, {"pefile": module}):
+            result = ir.pe_deps(target)
+        self.assertIs(result["available"], True)
+        self.assertIsNone(result["version_info"])
 
 
 def _rmtree(path: Path) -> None:

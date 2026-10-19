@@ -288,6 +288,17 @@ def macho_deps(path: Path) -> dict[str, object]:
     }
 
 
+def _pe_string(value: object) -> str:
+    """Строка VERSION-ресурса: ключи/значения pefile — bytes, декодируем явно.
+
+    ``str(bytes)`` дал бы ``"b'FileVersion'"`` и потерю всех полей,
+    поэтому bytes декодируются, прочее приводится к str как есть.
+    """
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return str(value)
+
+
 def pe_deps(path: Path) -> dict[str, object]:
     """Импорты DLL и VERSION-ресурсы PE-файла через pefile (если установлен)."""
     try:
@@ -332,10 +343,17 @@ def pe_deps(path: Path) -> dict[str, object]:
             ]
         )
         strings: dict[str, str] = {}
-        for file_info in getattr(pe, "FileInfo", None) or []:
-            for table in getattr(file_info, "StringTable", None) or []:
-                for key, value in (table.entries or {}).items():
-                    strings.setdefault(str(key), str(value))
+        # Фактическая форма API: FileInfo — список списков структур
+        # (StringFileInfo/VarFileInfo); StringTable.entries — bytes.
+        for info_list in getattr(pe, "FileInfo", None) or []:
+            for info in info_list or []:
+                for table in getattr(info, "StringTable", None) or []:
+                    for key, value in (
+                        getattr(table, "entries", None) or {}
+                    ).items():
+                        text_key = _pe_string(key)
+                        if text_key not in strings:
+                            strings[text_key] = _pe_string(value)
         if strings:
             version = {
                 "file_version": strings.get("FileVersion"),
@@ -367,6 +385,33 @@ def native_binary_deps(path: Path) -> dict[str, object] | None:
     return None
 
 
+def native_walk_paths(
+    bundle: Path, files: list[dict[str, object]]
+) -> list[str]:
+    """Нативные бинари полного обхода по magic, включая файлы без расширения.
+
+    Библиотечный предикат сборки распознаёт расширения и ELF-magic, но не
+    безымянный Mach-O: framework-runtime macOS вида
+    ``_internal/Python.framework/Versions/3.14/Python`` — обычный Mach-O
+    файл без библиотечного расширения. Такой файл обязан получить записи
+    зависимостей/provenance наравне с остальными; symlink-записи не
+    разыменовываются (цель учитывается в собственном месте дерева).
+    """
+    paths: list[str] = []
+    for entry in files:
+        if entry.get("type") != "file":
+            continue
+        path = bundle.joinpath(*str(entry["path"]).split("/"))
+        try:
+            with path.open("rb") as stream:
+                head = stream.read(512)
+        except OSError:
+            continue
+        if is_macho(head) or is_pe(head) or head[:4] == b"\x7fELF":
+            paths.append(str(entry["path"]))
+    return paths
+
+
 def _toc_entries(data: object) -> list[tuple[str, str, str]]:
     """Записи TOC из python-literal файла PyInstaller (dest, src, typecode)."""
     while isinstance(data, tuple) and len(data) == 1:
@@ -387,13 +432,30 @@ def _toc_entries(data: object) -> list[tuple[str, str, str]]:
 def collect_toc_sources(workpath: Path) -> dict[str, dict[str, str]]:
     """Provenance COLLECT TOC: путь в комплекте → исходный файл сборки.
 
-    Читаются только ``COLLECT-*.toc`` из workpath staging'а; повреждённый
-    или нечитаемый файл пропускается (факт nullable, не отказ).
+    Закреплённый PyInstaller кладёт рабочие файлы не в сам ``--workpath``,
+    а во вложенный каталог имени spec (``workpath = join(workpath,
+    specnm)`` — ``building/build_main.py``); ищутся оба места: вложенное
+    фактическое и, для полноты, сам workpath. Читаются только
+    ``COLLECT-*.toc``; повреждённый или нечитаемый файл пропускается
+    (факт nullable, не отказ).
     """
+    roots = [workpath / bp.SPEC_FILE.stem, workpath]
+    files: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for toc_file in sorted(root.glob("COLLECT-*.toc")):
+            try:
+                real = toc_file.resolve()
+            except OSError:
+                real = toc_file
+            if real in seen:
+                continue
+            seen.add(real)
+            files.append(toc_file)
     sources: dict[str, dict[str, str]] = {}
-    if not workpath.is_dir():
-        return sources
-    for toc_file in sorted(workpath.glob("COLLECT-*.toc")):
+    for toc_file in files:
         try:
             data = ast.literal_eval(toc_file.read_text(encoding="utf-8"))
         except (OSError, ValueError, SyntaxError, MemoryError, RecursionError):
@@ -406,13 +468,31 @@ def collect_toc_sources(workpath: Path) -> dict[str, dict[str, str]]:
     return sources
 
 
+#: Contents-каталог onedir PyInstaller (spec его не переопределяет —
+#: значение по умолчанию закреплённой версии).
+CONTENTS_DIRECTORY = "_internal"
+
+
 def _provenance_for(
     path: str, toc: dict[str, dict[str, str]]
 ) -> dict[str, str] | None:
+    """Provenance по правилам COLLECT, без неоднозначного basename.
+
+    Исполняемый файл (EXECUTABLE/PKG) попадает в корень комплекта — dest
+    совпадает с путём записи; все остальные назначения PyInstaller
+    раскладывает под contents-каталогом, и в dest самого префикса нет —
+    сопоставление отбрасывает префикс у пути из комплекта. fallback по
+    одному basename запрещён: при коллизии имён в разных каталогах он
+    подставил бы чужой источник вместо честного «неизвестно».
+    """
     if path in toc:
         return toc[path]
-    by_basename = {Path(key).name: value for key, value in toc.items()}
-    return by_basename.get(Path(path).name)
+    prefix = f"{CONTENTS_DIRECTORY}/"
+    if path.startswith(prefix):
+        stripped = path[len(prefix) :]
+        if stripped in toc:
+            return toc[stripped]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +580,10 @@ def build_report(
             "acceptance, не устанавливает native_build_verified, не создаёт "
             "release-asset и не заполняет пины toolchain.json. Факты "
             "предназначены для следующего этапа закрепления пинов и "
-            "лицензионного закрытия."
+            "лицензионного закрытия. Записи libraries с recognized_by="
+            "\"full_walk_magic\" — диагностическое дополнение по magic "
+            "(например, extensionless Mach-O framework runtime), не часть "
+            "контракта лицензионного инвентаря."
         ),
         "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source_sha": sha,
@@ -603,17 +686,27 @@ def inventory_runtime(
         bp._run_selfcheck(bundle / executable, staging / "selfcheck")
 
         print("[inventory] инвентарь и факты runtime", file=sys.stderr)
-        inventory = bp.inventory_bundle_libraries(bundle, target=target)
-        toc = collect_toc_sources(work)
         files = full_bundle_inventory(bundle)
-        libraries = [
-            {
-                "path": rel,
-                "toc_source": _provenance_for(rel, toc),
-                "deps": native_binary_deps(bundle.joinpath(*rel.split("/"))),
-            }
-            for rel in inventory
-        ]
+        inventory = bp.inventory_bundle_libraries(bundle, target=target)
+        inventory_set = set(inventory)
+        supplemented = sorted(inventory_set | set(native_walk_paths(bundle, files)))
+        toc = collect_toc_sources(work)
+        libraries = []
+        for rel in supplemented:
+            libraries.append(
+                {
+                    "path": rel,
+                    # Переиспользованный библиотечный инвентарь или
+                    # диагностическое дополнение по magic (без расширения).
+                    "recognized_by": (
+                        "library_inventory"
+                        if rel in inventory_set
+                        else "full_walk_magic"
+                    ),
+                    "toc_source": _provenance_for(rel, toc),
+                    "deps": native_binary_deps(bundle.joinpath(*rel.split("/"))),
+                }
+            )
         licenses = collect_runtime_licenses()
         report = build_report(
             target,
