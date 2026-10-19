@@ -275,6 +275,52 @@ class SearchTests(unittest.TestCase):
                     self.assertEqual(found.total, 1)
                     self.assertEqual(found.books[0].title, "ＡＢ２")
 
+    def test_canonical_codepoints_real_index_and_search(self) -> None:
+        """Канонизация U+FFFE/U+FFFF в настоящем индексе и поиске.
+
+        Каталожные поля с noncharacter-парами (валидный UTF-8, статус в
+        токенизаторе unicode61 зависит от версии SQLite): запрос без них
+        и запрос с ними обязаны одинаково находить книгу — AND/префикс по
+        обеим norm-колонкам работают после симметричного вырезания, а
+        сырые ``Book.title``/``author`` не изменяются (нормализуется
+        только поисковая форма). До канонизации (волна source CI) оба
+        запроса не находили книгу ни на 3.45.1, ни на 3.54.0: токен
+        индекса содержал спорную точку или рвался ею.
+        """
+        groups = {
+            "a": [
+                _row(
+                    "1",
+                    "Бул\uFFFEгаков Мих\uFFFFаил",
+                    "Ма\uFFFEстер и Ма\uFFFFргарита",
+                    LANG="ru",
+                ),
+                _row("2", "Автор Раз", "Книга Раз", LANG="ru"),
+            ]
+        }
+        library = make_library(self.root, groups)
+        with open_search(library, self.paths) as session:
+            # Чистые токены: AND обоих слов и префикс «булг» по автору.
+            clean = session.search("мастер маргарита")
+            self.assertEqual(clean.total, 1)
+            self.assertEqual(clean.books, (_expected_book(groups["a"][0]),))
+            self.assertEqual(session.search("булг").total, 1)
+            # Тот же результат для запроса С каноническими точками:
+            # вырезание симметрично, лексика запроса равна лексике индекса.
+            raw = session.search("ма\uFFFEстер мар\uFFFFгарита")
+            self.assertEqual(raw.total, 1)
+            self.assertEqual(raw.books, (_expected_book(groups["a"][0]),))
+            # Полное название с точками — точное совпадение norm_title.
+            exact = session.search("ма\uFFFEстер и ма\uFFFFргарита")
+            self.assertEqual(exact.total, 1)
+            self.assertEqual(exact.books[0].file_id, "1")
+            # Контроль: посторонняя книга не подмешивается.
+            self.assertEqual(session.search("книга раз мастер").total, 0)
+        # Сырые поля возвращённой книги несут исходные кодовые точки.
+        book = clean.books[0]
+        self.assertEqual(book.title, "Ма\uFFFEстер и Ма\uFFFFргарита")
+        self.assertEqual(book.author, "Бул\uFFFEгаков Мих\uFFFFаил")
+
     def test_punctuation_and_operators(self) -> None:
         """Пунктуация/``_`` — разделители; кавычки и операторы не исполняются."""
         self.assertEqual(build_match(("or",)), '"or"*')
@@ -654,14 +700,19 @@ class CanonicalNoncharacterTests(unittest.TestCase):
 
     def test_normalize_strips_exactly_canonical_set(self) -> None:
         canonical = set(range(0xD800, 0xE000)) | {0xFFFE, 0xFFFF}
+        # Явные ожидаемые строки: сохраняется не только «ничего каноническое
+        # не съедено», но и сами U+FFFD (обычный символ, не noncharacter-пара)
+        # и форматный U+2060 WORD JOINER (Cf вне канонического набора) —
+        # их удаление тоже изменило бы результат и обязано быть замеченным.
         kept = (
-            "мастер и маргарита",
-            "a\uFFFDb",  # REPLACEMENT CHARACTER — обычный символ, не noncharacter-пара
-            "ё́жик",
-            "AB \u2060 Cf",  # форматные символы НЕ входят в канонический набор
+            ("мастер и маргарита", "мастер и маргарита"),
+            ("a\uFFFDb", "a\uFFFDb"),  # REPLACEMENT CHARACTER сохранён
+            ("ё́жик", "е́жик"),  # ё→е, combining-метка сохранена
+            ("AB \u2060 Cf", "ab \u2060 cf"),  # WORD JOINER сохранён, casefold
         )
-        for sample in kept:
+        for sample, expected in kept:
             with self.subTest(sample=repr(sample)):
+                self.assertEqual(normalize(sample), expected)
                 stripped = [ord(c) for c in normalize(sample) if ord(c) in canonical]
                 self.assertEqual(stripped, [], f"канонизация съела лишнее: {sample!r}")
         removed = (

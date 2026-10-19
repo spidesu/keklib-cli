@@ -867,7 +867,26 @@ class PublishTests(unittest.TestCase):
         экспорт константы. Диспетчеризация Darwin подменяется
         ``sys.platform``; сам syscall на macOS проверяет
         ``test_darwin_native_publish``.
+
+        Guard до импорта: ``platforms.posix`` — POSIX-only модуль
+        (безусловные ``fcntl``/``resource``), на Windows его импорт —
+        гарантированный ModuleNotFoundError. Доступность проверяется
+        пробой импорта самого ``fcntl`` (ровно то, что отсутствует на
+        Windows и что моделируется Linux-пробой review), а не
+        строкой платформы: это предметный guard одной libc-регрессии,
+        НЕ blanket skip Windows-набора — нативная Windows-публикация
+        без перезаписи проверяется ``test_windows_native_publish``.
         """
+        try:
+            import fcntl as fcntl_probe  # noqa: F401
+        except ImportError:
+            fcntl_probe = None
+        if fcntl_probe is None:
+            self.skipTest(
+                "libc-адаптер renamex_np живёт в POSIX-only модуле "
+                "platforms.posix (fcntl/resource); нативная Windows-"
+                "публикация без перезаписи — test_windows_native_publish"
+            )
         from keklib_cli.platforms import posix as posix_module
 
         self.assertEqual(posix_module._RENAME_EXCL, 0x00000004)
