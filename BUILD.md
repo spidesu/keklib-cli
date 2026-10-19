@@ -1,10 +1,8 @@
 # Сборка keklib-cli
 
 Сборочная документация: окружение разработки, сборка portable-архивов и
-гейты конвейера. Все команды приведены в форме Linux и проверены на
-Linux; непроверенные формы других платформ помечены явно — фиктивных
-«проверенных» команд здесь нет. Сборка строго нативная: кросс-сборка
-запрещена и отвергается инструментом до каких-либо действий.
+гейты конвейера. Сборка строго нативная: кросс-сборка запрещена и
+отвергается инструментом до каких-либо действий.
 
 ## Окружение разработки (Linux, проверено)
 
@@ -66,7 +64,8 @@ build-зависимостей на каждый target; поле `sqlite` — �
 (release-гейт, см. ниже): пока версия не инвентаризована нативной
 сборкой, значение не заполняется и выпуск невозможен. Флаг
 `native_build_verified` отмечает target с завершённой нативной сборкой
-и приёмкой.
+и per-target приёмкой (нативные сборки и изолированные smoke на
+сборочных ОС); это не выпускной гейт полной матрицы.
 
 | target | runner CI | формат | заявленный baseline сборки |
 | --- | --- | --- | --- |
@@ -93,11 +92,13 @@ keklib-cli.spec`, staging под `build/`) → документы и `build-info
 ниже). На хосте новее baseline glibc-гейт честно отказывает, перечисляя
 нарушающие ELF-файлы, — для релизных сборок используйте baseline-билдер
 следующего раздела. Существующие архивы и `.sha256` не перезаписываются,
-чужой `--output` не очищается. Формы Windows/macOS (нативные runner'ы,
-**не проверено**):
+чужой `--output` не очищается. Формы Windows/macOS — те же стадии на
+нативной для target машине (в CI эти сборки выполняет
+`portable.yml`; приводимые ручные формы — справочные, дословно
+администратором не прогонялись):
 
 ```powershell
-# НЕ ПРОВЕРЕНО: выполняется на нативной Windows (runner windows-2022)
+# Нативная Windows (baseline — Windows Server 2022)
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e .
 .venv\Scripts\python.exe -m pip install -r packaging\requirements-build.lock
@@ -105,10 +106,9 @@ python -m venv .venv
 ```
 
 ```bash
-# НЕ ПРОВЕРЕНО: выполняется на нативной macOS; target выбирается строго
-# по архитектуре машины: Intel → macos-x86_64, Apple Silicon → macos-arm64
-# (runner'ы — в таблице выше; нативность-гейт запрещает сборку не на своей
-# архитектуре/ОС)
+# Нативная macOS; target выбирается строго по архитектуре машины:
+# Intel → macos-x86_64, Apple Silicon → macos-arm64 (нативность-гейт
+# запрещает сборку не на своей архитектуре/ОС)
 python3 -m venv .venv
 .venv/bin/python -m pip install -e .
 .venv/bin/python -m pip install -r packaging/requirements-build.lock
@@ -172,8 +172,11 @@ pip-зависимостей (в `/opt/builder/` внутри образа).
    build-info.json; python/pyinstaller в build-info обязаны равняться
    пинам.
 8. **Лицензионный гейт** (`verify_license_closure`): инвентарь
-   фактических библиотек комплекта (executable, `base_library.zip`,
-   верхнеуровневые `.so*`/`.dll`/`.dylib` из `_internal`) сверяется с
+   фактических библиотек комплекта — рекурсивный обход всего дерева с
+   распознаванием по расширению в любом регистре и по binary-magic
+   (`*.so*`/`.dll`/`.dylib`/`.pyd`/`.exe`, `base_library.zip`,
+   исполнимый файл target, extensionless ELF/Mach-O (включая
+   FAT/FAT64-контейнеры) и PE по magic `MZ`) — сверяется с
    `license-closure.json`: полное покрытие, явное `distribution_ok`,
    существующие файлы уведомлений; уведомления копируются в `licenses/`
    архива. Состав закрытия linux-билдера: PSF (CPython + статические
@@ -297,39 +300,39 @@ source-tests, строит матрицу четырёх target **из targets.j
 Зелёный source CI — это проверка исходников на матрице ОС/Python, а не
 приёмка portable-сборок (для неё требуются нативные smoke-отчёты и
 выпускной гейт). SQLite-пины всех target заполнены в
-`packaging/toolchain.json` фактами инвентаризации runtime, поэтому
-сборки Windows/macOS больше не останавливаются release-гейтом на null-пине;
-их выпуск остаётся заблокированным до полного гейта четырёх target.
+`packaging/toolchain.json` фактами инвентаризации runtime, а три
+native-target (Windows/macOS) прошли per-target приёмку в подготовительном
+режиме конвейера; полный выпускной гейт требует успешного прогона всей
+матрицы четырёх target.
 У `workflow_dispatch` есть режим объёма прогона (input `scope`):
-`all` (по умолчанию) — полный выпускной конвейер с гейтом и
-`SHA256SUMS`; `windows-macos` — подготовительный прогон трёх native-target
-(Linux исключается по `system` из targets.json): build и обязательный
-изолированный smoke выполняются, выпускной гейт не запускается,
-`SHA256SUMS`/`verified-portable` не создаются — это не release-acceptance.
+`all` (по умолчанию) — полный выпускной конвейер всех четырёх target
+с гейтом и `SHA256SUMS`; `windows-macos` — подготовительный прогон трёх
+native-target (Linux исключается по `system` из targets.json): build и
+обязательный изолированный smoke выполняются, выпускной гейт не
+запускается, `SHA256SUMS`/`verified-portable` не создаются — это не
+release-acceptance.
 
-## Диагностическая инвентаризация pending-target
+## Диагностическая инвентаризация runtime
 
 `.github/workflows/platform-inventory.yml` (`workflow_dispatch`):
-диагностический прогон на нативных стандартных runner'ах трёх
-pending-target (windows-x86_64/windows-2022, macos-x86_64/macos-15-intel,
-macos-arm64/macos-14) собирает факты фактического runtime (этап,
-поставивший SQLite-пины и состав лицензионного закрытия этих target;
-повторный прогон полезен при обновлении toolchain). Локально
-на нативной для target ОС/CPU:
+диагностический прогон на нативных стандартных runner'ах Windows/macOS
+собирает факты фактического runtime (этап, поставивший SQLite-пины и
+состав лицензионного закрытия этих target; повторный прогон полезен при
+обновлении toolchain). Локально на нативной для target ОС/CPU:
 
     python tools/inventory_runtime.py --target windows-x86_64 \
         --output inventory-dist --source-sha $(git rev-parse HEAD)
 
 Отчёт `inventory-report-<target>.json` помечен `diagnostic_only`: он не
-является acceptance, не устанавливает `native_build_verified`, не создаёт
-архив/release-asset и не меняет пины. В отчёт входят: source SHA,
-факты хоста и runtime (Python/SQLite/FTS5/OpenSSL/zlib/libffi), метаданные
-build-info, полный хешированный инвентарь диагностического onedir,
-нативные зависимости библиотек (`otool -L` на macOS, импорты и
-VERSION-ресурсы через pefile на Windows), provenance файлов по COLLECT TOC
-PyInstaller и тексты LICENSE установленного runtime из известных мест.
-Единственный CI-артефакт — сам отчёт; сырой комплект не загружается и
-удаляется вместе со staging.
+является acceptance, не создаёт архив/release-asset и не меняет пины.
+В отчёт входят: source SHA, факты хоста и runtime
+(Python/SQLite/FTS5/OpenSSL/zlib/libffi), метаданные build-info, полный
+хешированный инвентарь диагностического onedir, нативные зависимости
+библиотек (`otool -L` на macOS, импорты и VERSION-ресурсы через pefile
+на Windows), provenance файлов по COLLECT TOC PyInstaller и тексты
+LICENSE установленного runtime из известных мест. Единственный
+CI-артефакт — сам отчёт; сырой комплект не загружается и удаляется
+вместе со staging.
 
 ## Состав portable-архива
 

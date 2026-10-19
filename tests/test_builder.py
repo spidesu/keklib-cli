@@ -295,16 +295,18 @@ class LinuxNativeStateTests(unittest.TestCase):
         self.assertIsNotNone(linux["verified_on"])
         for other in ("windows-x86_64", "macos-x86_64", "macos-arm64"):
             entry = toolchain["targets"][other]
-            # Pin заполнен только фактом диагностической инвентаризации
-            # runtime python.org 3.14.8 на нативных runner'ах (все три
-            # target показали SQLite 3.50.4 с FTS5), а не выдуман.
+            # Pin заполнен фактом диагностической инвентаризации runtime
+            # python.org 3.14.8 на нативных runner'ах (все три target
+            # показали SQLite 3.50.4 с FTS5), а не выдуман.
             self.assertEqual(
                 entry["sqlite"], "3.50.4", f"{other}: pin по факту инвентаризации"
             )
-            # Пин ≠ приёмка: реальные сборки/smoke этих target не выполнялись,
-            # выпуск по-прежнему блокируется до native build + full smoke.
-            self.assertFalse(entry["native_build_verified"])
-            self.assertIsNone(entry["verified_on"])
+            # Финальная волна (2026-10-19): нативные сборки и изолированные
+            # smoke выполнены и приняты per-target (run 39276125022);
+            # выпускной гейт полной матрицы четырёх target остаётся
+            # отдельным обязательным шагом до публикации.
+            self.assertIs(entry["native_build_verified"], True, other)
+            self.assertEqual(entry["verified_on"], "2026-10-19", other)
 
     def test_pending_target_notes_are_neutral(self) -> None:
         """Notes pending-target не несут PII/путей scratch-окружения."""

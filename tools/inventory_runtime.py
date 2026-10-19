@@ -71,7 +71,9 @@ REPORT_SCHEMA_VERSION = 2
 
 _SOURCE_SHA_RE = re.compile(r"[0-9a-f]{40}")
 
-#: Mach-O magic (LE/BE, 32/64-bit) и FAT-контейнеры.
+#: Mach-O magic (LE/BE, 32/64-bit) и FAT/FAT64-контейнеры (обе ориентации).
+#: FAT64 (0xcafebabf/0xbfbafeca) — отдельный universal-формат с 64-битными
+#: записями fat_arch, не thin Mach-O 64 и не FAT32.
 _MACHO_MAGICS = (
     b"\xfe\xed\xfa\xce",
     b"\xce\xfa\xed\xfe",
@@ -79,6 +81,8 @@ _MACHO_MAGICS = (
     b"\xcf\xfa\xed\xfe",
     b"\xca\xfe\xba\xbe",
     b"\xbe\xba\xfe\xca",
+    b"\xca\xfe\xba\xbf",
+    b"\xbf\xba\xfe\xca",
 )
 
 #: Точные имена лицензионных файлов в известных местах runtime.
@@ -162,9 +166,12 @@ def runtime_facts() -> dict[str, object]:
     # честно. decimal.__libmpdec_version__ — публичный факт модуля
     # (None записывается явно, если модуль его не раскрывает). liblzma —
     # узкая ctypes-проба образа САМОГО модуля _lzma (символ
-    # lzma_version_string): статическая компоновка macOS экспортирует его
-    # из модуля, динамическая линковка Linux — нет; None означает
-    # «не экспортирован из образа модуля», без догадок и без поиска по
+    # lzma_version_string): она видит символ, только если тот
+    # экспортирован из самого образа модуля (типично для статической
+    # компоновки macOS); при динамической компоновке dlsym(handle) может
+    # найти символ и в зависимостях образа, поэтому «динамическая
+    # линковка → null» неверен как общее правило; None означает
+    # «не найден пробой образа модуля», без догадок и без поиска по
     # process-wide dlopen.
     try:
         import decimal as _decimal

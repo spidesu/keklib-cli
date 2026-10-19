@@ -604,9 +604,23 @@ class SourceContractTests(unittest.TestCase):
 
 class DepsProbeTests(unittest.TestCase):
     def test_format_detection(self):
-        self.assertTrue(ir.is_macho(b"\xcf\xfa\xed\xfe" + b"\x00" * 8))
-        self.assertTrue(ir.is_macho(b"\xfe\xed\xfa\xcf" + b"\x00" * 8))
-        self.assertTrue(ir.is_macho(b"\xca\xfe\xba\xbe" + b"\x00" * 8))
+        """Распознавание форматов: все Mach-O magic, включая FAT64, ELF — нет.
+
+        FAT64 (universal Mach-O с 64-битными fat_arch) — отдельный формат,
+        а не уже покрытый thin Mach-O 64/FAT32: обе ориентации обязаны
+        проходить is_macho, иначе полный обход не заметит такой бинарь
+        (F1 final review).
+        """
+        for magic in (
+            b"\xcf\xfa\xed\xfe",  # MH_MAGIC_64 LE
+            b"\xfe\xed\xfa\xcf",  # MH_MAGIC_64 BE
+            b"\xce\xfa\xed\xfe",  # MH_MAGIC LE
+            b"\xca\xfe\xba\xbe",  # FAT BE
+            b"\xbe\xba\xfe\xca",  # FAT LE
+            b"\xca\xfe\xba\xbf",  # FAT64 BE
+            b"\xbf\xba\xfe\xca",  # FAT64 LE
+        ):
+            self.assertTrue(ir.is_macho(magic + b"\x00" * 8), magic.hex())
         self.assertFalse(ir.is_macho(b"\x7fELF" + b"\x00" * 8))
         self.assertFalse(ir.is_macho(b"MZ" + b"\x00" * 8))
         self.assertTrue(ir.is_pe(_fake_pe_bytes()))
@@ -615,6 +629,31 @@ class DepsProbeTests(unittest.TestCase):
         self.assertFalse(
             ir.is_pe(bytes(mz_only)), "MZ без PE-сигнатуры — не PE"
         )
+
+    def test_native_walk_sees_extensionless_fat64(self):
+        """Полный обход видит extensionless FAT64-бинарь обеих ориентаций.
+
+        Диагностическая страховка инвентаря сборки обязана покрывать все
+        варианты Mach-O/FAT: файл вроде ``_internal/vendor/runtime`` с
+        FAT64-magic не может выпадать из full walk (F1 final review).
+        """
+        bundle = portable_mkdtemp()
+        self.addCleanup(lambda: _rmtree(bundle))
+        files = []
+        expected = []
+        for magic in (b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"):
+            rel = f"_internal/vendor/runtime-{magic.hex()}"
+            path = bundle.joinpath(*rel.split("/"))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(magic + b"payload")
+            files.append({"path": rel, "type": "file"})
+            expected.append(rel)
+        files.append({"path": "_internal/vendor/notes.txt", "type": "file"})
+        (bundle / "_internal" / "vendor" / "notes.txt").write_bytes(b"text")
+        walked = ir.native_walk_paths(bundle, files)
+        for rel in expected:
+            self.assertIn(rel, walked)
+        self.assertNotIn("_internal/vendor/notes.txt", walked)
 
     def test_macho_probe_never_raises(self):
         staging = portable_mkdtemp()

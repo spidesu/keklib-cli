@@ -506,24 +506,36 @@ class PackagingTests(unittest.TestCase):
             )
 
     def test_native_targets_sqlite_pins_by_evidence(self) -> None:
-        """Пины трёх native-target — факт инвентаризации, не приёмка.
+        """Пины и native-флаги трёх native-target — факты, а не обещания.
 
-        Диагностические inventory-отчёты pending-target (python.org runtime
-        3.14.8 на windows-2022/macos-15-intel/macos-14) показали одинаковый
-        SQLite 3.50.4 с FTS5 во всех трёх runtime. Пин фиксирует этот факт;
-        ``native_build_verified`` остаётся ``false``/``verified_on`` null до
-        реальной нативной сборки и полного изолированного smoke каждого
-        target — пин не является заявлением о принятом выпуске.
+        SQLite-pin 3.50.4 зафиксирован диагностической инвентаризацией
+        runtime (python.org 3.14.8 на windows-2022/macos-15-intel/
+        macos-14). ``native_build_verified=true``/``verified_on`` —
+        фактическая per-target приёмка 2026-10-19: нативная сборка
+        (все гейты tools/build_portable.py) и обязательный изолированный
+        smoke на свежей машине CI (run 39276125022, source SHA ветки
+        7b8fe2908cefff02e8b1b874c50e13c130a195cd, подготовительный scope
+        без выпускного гейта полной матрицы). Per-target приёмка — не
+        full-matrix release gate.
         """
         toolchain = bp.load_toolchain()
         linux = toolchain["targets"]["linux-x86_64"]
         self.assertEqual(linux["sqlite"], "3.54.1")
         self.assertTrue(linux["native_build_verified"])
+        self.assertEqual(linux["verified_on"], "2026-10-18")
         for other in ("windows-x86_64", "macos-x86_64", "macos-arm64"):
             entry = toolchain["targets"][other]
             self.assertEqual(entry["sqlite"], "3.50.4", other)
-            self.assertIs(entry["native_build_verified"], False, other)
-            self.assertIsNone(entry["verified_on"], other)
+            self.assertIs(entry["native_build_verified"], True, other)
+            self.assertEqual(entry["verified_on"], "2026-10-19", other)
+            # Provenance-привязка флага к фактическому прогону приёмки:
+            # run CI и source SHA обязательны в note — флаг без ссылки на
+            # evidence не отличается от выдуманного.
+            note = str(entry.get("note", ""))
+            self.assertIn("39276125022", note, other)
+            self.assertIn(
+                "7b8fe2908cefff02e8b1b874c50e13c130a195cd", note, other
+            )
 
     def test_native_release_gate_uses_new_pins(self) -> None:
         """Release-гейт сверяет фактический SQLite 3.50.4 с новым пином."""
@@ -1012,6 +1024,21 @@ class PackagingTests(unittest.TestCase):
         self.assertNotIn("_internal/python3.14/lib-dynload/plain.pyc", inventory)
         self.assertNotIn("_internal/runtime.dynlib", inventory)
 
+    #: Полный набор Mach-O magic: thin 32/64 LE/BE и FAT/FAT64-контейнеры
+    #: обеих байтовых ориентаций (F1 final review: FAT_CIGAM_64 0xbfbafeca —
+    #: отдельный universal-формат с 64-битными записями таблицы архитектур,
+    #: а не уже покрытый thin Mach-O 64).
+    _MACHO_MAGIC_VARIANTS = (
+        b"\xcf\xfa\xed\xfe",  # MH_MAGIC_64 LE
+        b"\xfe\xed\xfa\xcf",  # MH_MAGIC_64 BE
+        b"\xce\xfa\xed\xfe",  # MH_MAGIC LE
+        b"\xfe\xed\xfa\xce",  # MH_MAGIC BE
+        b"\xca\xfe\xba\xbe",  # FAT BE
+        b"\xbe\xba\xfe\xca",  # FAT LE
+        b"\xca\xfe\xba\xbf",  # FAT64 BE
+        b"\xbf\xba\xfe\xca",  # FAT64 LE
+    )
+
     def test_license_inventory_detects_extensionless_macho(self) -> None:
         """Framework-runtime macOS (Mach-O без расширения) — в инвентаре.
 
@@ -1020,31 +1047,65 @@ class PackagingTests(unittest.TestCase):
         без библиотечного расширения. Раньше его видел только диагностический
         полный обход inventory-отчёта (``full_walk_magic``); лицензионный
         инвентарь сборки обязан учитывать его сам — иначе binary runtime
-        выпускается без лицензионного покрытия.
+        выпускается без лицензионного покрытия. FAT64 (universal Mach-O с
+        64-битными записями fat_arch) — тоже Mach-O: пропуск magic
+        выпускал бы неизвестный binary без покрытия (F1 final review).
         """
         bundle = _make_bundle_dir(self.tmp / "macho")
         framework = bundle / "_internal" / "Python.framework" / "Versions" / "3.14"
         framework.mkdir(parents=True)
-        for magic in (
-            b"\xcf\xfa\xed\xfe",  # MH_MAGIC_64 LE
-            b"\xfe\xed\xfa\xcf",  # MH_MAGIC_64 BE
-            b"\xce\xfa\xed\xfe",  # MH_MAGIC LE
-            b"\xca\xfe\xba\xbe",  # FAT BE
-            b"\xbe\xba\xfe\xca",  # FAT LE
-        ):
+        for magic in self._MACHO_MAGIC_VARIANTS:
             target_dir = bundle / "_internal" / f"macho-{magic.hex()}"
             target_dir.mkdir()
             (target_dir / "Python").write_bytes(magic + b"payload")
         inventory = bp.inventory_bundle_libraries(bundle, target="macos-x86_64")
-        for magic in (
-            b"\xcf\xfa\xed\xfe",
-            b"\xfe\xed\xfa\xcf",
-            b"\xce\xfa\xed\xfe",
-            b"\xca\xfe\xba\xbe",
-            b"\xbe\xba\xfe\xca",
-        ):
+        for magic in self._MACHO_MAGIC_VARIANTS:
             identifier = f"_internal/macho-{magic.hex()}/Python"
             self.assertIn(identifier, inventory)
+
+    def test_license_gate_blocks_unknown_fat64_binary(self) -> None:
+        """Extensionless FAT64-бинарь без покрытия блокирует лицензионный гейт.
+
+        Fail-closed-контракт «неизвестный вложенный binary блокирует выпуск»
+        обязан выполняться и для FAT64-варианта universal Mach-O (обе
+        ориентации), а не только thin/FAT32: файл без библиотечного
+        расширения с таким magic не может быть пропущен инвентарём как
+        «не библиотека» (F1 final review).
+        """
+        for magic in (b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"):
+            with self.subTest(magic=magic.hex()):
+                # Уникальный комплект на subTest: _license_fixture использует
+                # фиксированный путь и не переживает второй проход.
+                bundle = _make_bundle_dir(self.tmp / f"fat64-{magic.hex()}")
+                (bundle / "_internal" / "libtestlib.so.1").write_bytes(b"x")
+                notices = self.tmp / f"notices-{magic.hex()}"
+                (notices / "licenses" / "testlib").mkdir(parents=True)
+                (notices / "licenses" / "testlib" / "LICENSE.txt").write_text(
+                    "TESTLIB LICENSE TEXT\n", encoding="utf-8"
+                )
+                components = {
+                    "mit-test": {
+                        "license": "MIT",
+                        "notice": "licenses/testlib/LICENSE.txt",
+                        "distribution_ok": True,
+                    }
+                }
+                manifest = self.tmp / f"manifest-{magic.hex()}.json"
+                manifest.write_text(
+                    json.dumps(self._manifest_v2(components, self._full_coverage(bundle))),
+                    encoding="utf-8",
+                )
+                vendor = bundle / "_internal" / "vendor"
+                vendor.mkdir()
+                (vendor / "runtime").write_bytes(magic + b"payload")
+                with self.assertRaises(bp.PackagingError) as ctx:
+                    bp.verify_license_closure(
+                        bundle,
+                        target="macos-x86_64",
+                        manifest_path=manifest,
+                        notices_root=notices,
+                    )
+                self.assertIn("_internal/vendor/runtime", str(ctx.exception))
 
     def test_license_inventory_detects_pe_magic_and_case_extensions(self) -> None:
         """PE-magic без расширения и расширения в верхнем регистре.
@@ -2342,6 +2403,123 @@ class NativeTargetsClosureTests(unittest.TestCase):
                 notice = entry.get("notice")
                 self.assertIsInstance(notice, str, name)
                 self.assertTrue((PROJECT_ROOT / "packaging" / notice).is_file(), name)
+
+
+class DeliveryDocsSafetyTests(unittest.TestCase):
+    """Обязательные честные формулировки пользовательских docs поставки.
+
+    README/INSTALL/BUILD/THIRD_PARTY_NOTICES копируются в комплекты
+    (кроме BUILD.md), поэтому их статус доступности обязан соответств
+    фактической per-target приёмке: черновики Release не выдаются за
+    публичную поставку, клиентские Windows/macOS не обещаются нативными
+    baseline-прогонами серверных/актуальных сборочных ОС, а команды
+    проверки сумм даются для каждой ОС поставки.
+    """
+
+    @staticmethod
+    def _doc(name: str) -> str:
+        return (PROJECT_ROOT / name).read_text(encoding="utf-8")
+
+    def test_readme_keeps_exact_vibe_warning(self) -> None:
+        """Точное предупреждение о вайбкодерской природе проекта сохранено."""
+        self.assertIn(
+            "**Этот проект полностью вайбкодерский.**",
+            self._doc("README.md"),
+        )
+
+    def test_docs_never_claim_client_windows(self) -> None:
+        """Нативный baseline Windows Server не выдаётся за клиентские ОС."""
+        for name in ("README.md", "INSTALL.md", "BUILD.md"):
+            for claim in ("Windows 10", "Windows 11"):
+                self.assertNotIn(claim, self._doc(name), f"{name}: {claim}")
+
+    def test_docs_state_no_public_release_yet(self) -> None:
+        """Черновики не являются публичной поставкой; публичного релиза нет."""
+        readme = self._doc("README.md")
+        install = self._doc("INSTALL.md")
+        self.assertIn("Публичного готового релиза пока нет", readme)
+        self.assertIn("Публичного готового portable-релиза пока нет", install)
+        self.assertIn("не подписаны сертификатом", readme)
+        self.assertIn("не являются публичной поставкой", readme)
+
+    def test_readme_lists_all_four_targets_with_baselines(self) -> None:
+        """Доступность описана для всех четырёх target с их baseline."""
+        readme = self._doc("README.md")
+        for label in (
+            "Linux x86-64",
+            "Windows x64",
+            "macOS Intel",
+            "macOS Apple Silicon",
+        ):
+            self.assertIn(label, readme)
+        self.assertIn("Ubuntu 22.04", readme)
+        self.assertIn("Windows Server 2022", readme)
+        self.assertIn("macOS 15", readme)
+        self.assertIn("macOS 14", readme)
+        # Полная матрица — незавершённый шаг, per-target приёмка ею не является.
+        self.assertIn("per-target", readme)
+
+    def test_install_checksum_commands_for_every_delivery_os(self) -> None:
+        """Свёрка SHA-256 описана для Linux, macOS и Windows поставок."""
+        text = self._doc("INSTALL.md")
+        self.assertIn("sha256sum -c", text)
+        self.assertIn("shasum -a 256 -c", text)
+        self.assertIn("Get-FileHash", text)
+
+    def test_install_names_archive_per_target(self) -> None:
+        """Выбор архива по ОС/CPU: имя вида <version>-<target>.<ext> для всех."""
+        text = self._doc("INSTALL.md")
+        for target in FOUR_TARGETS:
+            extension = "zip" if target == "windows-x86_64" else "tar.gz"
+            self.assertIn(f"-<version>-{target}.{extension}", text)
+
+    def test_install_requires_exact_library_layout(self) -> None:
+        """Точная раскладка библиотеки — обязательный элемент инструкции."""
+        text = self._doc("INSTALL.md")
+        self.assertIn("librusec_flib.inpx", text)
+        self.assertIn("lib.rus.ec", text)
+
+    def test_build_license_gate_is_recursive_magic_inventory(self) -> None:
+        """BUILD описывает лицензионный гейт рекурсивным инвентарём с magic.
+
+        Прежний текст «верхнеуровневые … из _internal» описывал уже
+        несуществующий инвентарь: гейт обходит всё дерево и распознаёт
+        extensionless ELF/Mach-O (включая FAT/FAT64) и PE по magic.
+        """
+        text = self._doc("BUILD.md")
+        self.assertNotIn("верхнеуровневые", text)
+        self.assertIn("рекурсивн", text)
+        self.assertIn("magic", text)
+        self.assertIn("FAT64", text)
+
+    def test_notices_match_per_target_accepted_closures(self) -> None:
+        """THIRD_PARTY_NOTICES: per-target закрытия приняты, гейт остаётся.
+
+        Устаревшее «нативные сборки и изолированные smoke этих target ещё
+        не выполнялись» противоречит фактической приёмке всех четырёх
+        target; measured-факты macOS (libmpdec 4.0.1, XZ 5.2.3)
+        подтверждены runtime-зондами на обеих архитектурах CPU.
+        """
+        text = self._doc("packaging/THIRD_PARTY_NOTICES.md")
+        self.assertNotIn("ещё не выполнялись", text)
+        self.assertNotIn("Подготовленное закрытие", text)
+        self.assertIn("4.0.1", text)
+        self.assertIn("5.2.3", text)
+
+    def test_manifest_notes_no_stale_pending_wording(self) -> None:
+        """license-closure.json: принятое per-target закрытие, не «pending»."""
+        manifest = json.loads(
+            (PROJECT_ROOT / "packaging" / "license-closure.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        notes = str(manifest.get("notes", ""))
+        self.assertNotIn("PENDING-TARGET", notes)
+        self.assertNotIn("реальные нативные сборки и полные изолированные "
+                         "smoke этих target не выполнялись", notes)
+        self.assertIn("39276125022", notes)
+        self.assertIn("4.0.1", notes)
+        self.assertIn("5.2.3", notes)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -24,6 +24,7 @@ TMPDIR_TMP_FALLBACK = "os.environ.get(" + '"TMPDIR", "/tmp")'
 
 class PortableTempTests(unittest.TestCase):
     def test_respects_tmpdir_when_set(self):
+        """TMPDIR задан — временные каталоги тестов создаются внутри него."""
         from tests.portable import portable_mkdtemp
 
         base = Path(tempfile.mkdtemp())
@@ -53,6 +54,7 @@ class PortableTempTests(unittest.TestCase):
         made.rmdir()
 
     def test_helper_has_no_hardcoded_tmp(self):
+        """Портативный helper temp не содержит hardcoded /tmp."""
         source = (TESTS_DIR / "portable.py").read_text(encoding="utf-8")
         self.assertNotIn(
             '"/tmp"', source, "портативный helper не содержит hardcoded /tmp"

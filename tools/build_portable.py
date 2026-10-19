@@ -473,11 +473,12 @@ def verify_release_metadata(
 # Лицензионный гейт по фактическому составу
 
 
-#: Mach-O magic (LE/BE, 32/64-bit) и FAT-контейнеры — тот же набор, что в
-#: диагностическом tools/inventory_runtime.py; лицензионный инвентарь сборки
-#: обязан видеть extensionless Mach-O (framework-runtime macOS вида
-#: ``_internal/Python.framework/Versions/3.14/Python``) сам, а не только в
-#: диагностическом отчёте.
+#: Mach-O magic (LE/BE, 32/64-bit) и FAT/FAT64-контейнеры (обе ориентации) —
+#: тот же набор, что в диагностическом tools/inventory_runtime.py; лицензионный
+#: инвентарь сборки обязан видеть extensionless Mach-O (framework-runtime
+#: macOS вида ``_internal/Python.framework/Versions/3.14/Python``) сам, а не
+#: только в диагностическом отчёте. FAT64 (0xcafebabf/0xbfbafeca) — отдельный
+#: universal-формат с 64-битными fat_arch, не thin Mach-O 64 и не FAT32.
 _MACHO_MAGICS = (
     b"\xfe\xed\xfa\xce",
     b"\xce\xfa\xed\xfe",
@@ -485,11 +486,9 @@ _MACHO_MAGICS = (
     b"\xcf\xfa\xed\xfe",
     b"\xca\xfe\xba\xbe",
     b"\xbe\xba\xfe\xca",
+    b"\xca\xfe\xba\xbf",
+    b"\xbf\xba\xfe\xca",
 )
-
-
-def _is_macho(head: bytes) -> bool:
-    return head[:4] in _MACHO_MAGICS
 
 
 def _is_macho(head: bytes) -> bool:

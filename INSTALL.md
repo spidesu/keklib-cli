@@ -7,11 +7,13 @@ standalone: архив с исполняемым файлом и всеми ег
 ## Доступность
 
 Публичного готового portable-релиза пока нет: архивы не выложены в
-интернете и не подписаны сертификатом. Прошедшая гейты сборка существует
-для Linux x86-64 и передаётся владельцем проекта напрямую; выпуски
-Windows/macOS заблокированы до реальных нативных сборок и полных
-smoke-прогонов (SQLite-пины target заполнены фактом инвентаризации
-runtime, но это не приёмка).
+интернете и не подписаны сертификатом. Сборки, прошедшие нативную
+приёмку на своих сборочных ОС, существуют для всех четырёх target
+(Linux x86-64 — Ubuntu 22.04; Windows x64 — Windows Server 2022;
+macOS Intel — macOS 15; macOS Apple Silicon — macOS 14) и передаются
+владельцем проекта напрямую; полный выпускной гейт четырёхплатформенной
+матрицы и публикация Release — отдельный незавершённый шаг, черновики
+Release публичной поставкой не являются.
 Версию и параметры конкретного архива (version, target, python, sqlite,
 rules_version, minimum_os) см. в его `build-info.json`.
 
@@ -22,9 +24,11 @@ INPX/ZIP) только читается.
 ## Требования
 
 - Linux x86-64, glibc >= 2.35 (baseline Ubuntu 22.04; не musl/Alpine).
-- Windows x64 и macOS Intel/Apple Silicon — целевые платформы конвейера;
-  их клиентские выпуски не проверялись, заявлений «работает на
-  Windows 10/11» или старых macOS эта документация не содержит.
+- Windows x64 — baseline Windows Server 2022 (сборочная ОС); клиентские
+  выпуски Windows отдельно не проверялись и этой документацией не
+  заявляются.
+- macOS Intel — baseline macOS 15; macOS Apple Silicon — baseline
+  macOS 14. Более старые выпуски macOS не заявляются.
 - Python не нужен: runtime входит в архив. CPython 3.11+ требуется
   только для запуска из исходников (см. конец файла).
 
@@ -54,19 +58,28 @@ INPX/ZIP) только читается.
 **целостность** данных (совпадение байтов с тем, что собрал автор), но
 **не заменяет доверенную цифровую подпись** и не доказывает авторство:
 сумму надо сверять с источником, которому вы доверяете (страница релиза
-проекта или передача из первых рук). Подписи сертификатом нет.
+проекта или передача из первых рук) — приложенный файл `.sha256` и есть
+источник суммы. Подписи сертификатом нет.
 
-Linux/macOS (проверенная на Linux форма утилиты):
+Linux:
 
 ```bash
 sha256sum -c keklib-cli-<version>-linux-x86_64.tar.gz.sha256
 ```
 
-Windows PowerShell (форма не проверялась в нативной среде):
+macOS (встроенная утилита понимает формат sidecar `sha256sum`):
+
+```bash
+shasum -a 256 -c keklib-cli-<version>-macos-x86_64.tar.gz.sha256
+```
+
+Windows PowerShell — сверьте выведенное значение с содержимым файла
+`keklib-cli-<version>-windows-x86_64.zip.sha256` (случай символов в hex
+не различается):
 
 ```powershell
-# НЕ ПРОВЕРЕНО: сверка вручную
 Get-FileHash .\keklib-cli-<version>-windows-x86_64.zip -Algorithm SHA256
+Get-Content .\keklib-cli-<version>-windows-x86_64.zip.sha256
 ```
 
 ## 3. Распаковка и запуск без Python
@@ -105,11 +118,9 @@ echo 'export PATH="$HOME/Apps/keklib-cli:$PATH"' >> ~/.profile
 ~/Apps/keklib-cli/keklib-cli search "Мастер и Маргарита" --output ~/Books
 ```
 
-Те же команды в PowerShell (форма для справки, в нативной среде не
-проверялась):
+Те же команды в PowerShell:
 
 ```powershell
-# НЕ ПРОВЕРЕНО: форма для справки
 C:\Apps\keklib-cli\keklib-cli.exe setup --library "C:\Lib.rus.ec"
 C:\Apps\keklib-cli\keklib-cli.exe search "Булгаков Мастер"
 C:\Apps\keklib-cli\keklib-cli.exe search "Мастер и Маргарита" --output $HOME\Books
@@ -158,10 +169,9 @@ python3 -m venv .venv
 .venv/bin/python -m keklib_cli --help
 ```
 
-Форма для Windows (PowerShell; в нативной среде не проверялась):
+Форма для Windows (PowerShell):
 
 ```powershell
-# НЕ ПРОВЕРЕНО: форма для справки
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e .
 .venv\Scripts\python.exe -m keklib_cli --help
