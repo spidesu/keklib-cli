@@ -1434,8 +1434,11 @@ def _step_condition(job_text: str, step_name: str) -> str | None:
 
 def _write_fake(bin_dir: Path, name: str, body: str) -> None:
     # Bash-stubs пишутся точными UTF-8/LF-байтами (R1): текстовая запись по
-    # умолчанию переводит '\n' в os.linesep — на Windows это CRLF, shebang
-    # становится 'bash\r', и fake-команда не запускается вовсе.
+    # умолчанию переводит '\n' в os.linesep — на Windows это CRLF.
+    # Исполнимость CRLF-shebang — свойство хоста (нативный Linux не
+    # запускает 'bash\r'; Git Bash по факту run 39314095562 CRLF-stub
+    # исполняет), поэтому контракт — одинаковые байты скрипта на любой ОС,
+    # а не надежда на поведение shebang конкретного bash.
     path = bin_dir / name
     path.write_bytes(body.encode("utf-8"))
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -1948,19 +1951,25 @@ class LinuxCiBuilderRouteTests(unittest.TestCase):
             self.assertEqual(toolchain[target]["sqlite"], "3.50.4", target)
 
     def test_fake_bash_stubs_forced_lf_bytes(self):
-        """Bash-stubs пишутся точными LF-байтами, CRLF ломает shebang (R1, P1).
+        """Bash-stubs — точные LF-байты: контроль перевода строк, не исполнимость CRLF.
 
         ``Path.write_text`` без явного ``newline`` переводит ``\\n`` в
-        ``os.linesep`` — на Windows это CRLF, ``/usr/bin/env`` получает
-        ``bash\\r``, fake-команды не запускаются и обязательные Windows
-        source-jobs падают (а с ними build/smoke/gate всего конвейера).
-        Регрессия детерминированно эмулирует Windows-преобразование на
-        Linux: все записи перехватываются на ``Path.open`` → чистый
-        ``_pyio`` с ``os.linesep='\\r\\n'`` (``_pyio`` читает ``os.linesep``
-        в момент открытия, в отличие от кэширующего C ``_io``). Старая
-        запись по умолчанию на этой эмуляции даёт CRLF-байты и тест
-        падает; ``write_bytes`` от эмуляции не зависит. Контроль эмуляции
-        воспроизводит доказательство reviewer'а: CRLF-stub не исполняется.
+        ``os.linesep`` — на Windows это CRLF. Исполнимость CRLF-shebang —
+        свойство хоста, а не универсальный факт: нативный Linux передаёт
+        ``/usr/bin/env`` аргумент ``bash\\r`` и скрипт не запускается, а
+        настоящий Git Bash на windows-2022 по факту нативного прогона
+        39314095562 CRLF-stub исполняет (rc=0) — прежнее требование
+        «CRLF-скрипт обязан падать на любой ОС» было Linux-специфичным и
+        валило исправные обязательные Windows source-jobs. Переносимый
+        контракт — одинаковые детерминированные байты скрипта на каждой
+        ОС: регрессия эмулирует Windows-преобразование на любом хосте
+        (перехват ``Path.open`` → чистый ``_pyio`` с
+        ``os.linesep='\\r\\n'``; ``_pyio`` читает ``os.linesep`` в момент
+        открытия, в отличие от кэширующего C ``_io``), старая запись по
+        умолчанию на этой эмуляции даёт CRLF-байты и проваливает точные
+        байты; ``write_bytes`` от эмуляции не зависит. Контроль
+        подтверждает сам перевод (CRLF в байтах контроля), исполнимость
+        проверяется только на настоящем LF-stub.
         """
         import _pyio
         from unittest import mock
@@ -1990,26 +1999,17 @@ class LinuxCiBuilderRouteTests(unittest.TestCase):
                 self.assertEqual(content.split(b"\n")[0], b"#!/usr/bin/env bash", name)
 
             # Контроль эмуляции (доказательство R1): та же текстовая запись
-            # по умолчанию действительно даёт CRLF, и такой stub не исполняется.
+            # по умолчанию действительно даёт CRLF-байты — перевод строк
+            # доказывается байтами, без исполнения контроля (исполнимость
+            # CRLF-shebang — свойство хоста, см. docstring).
             broken = case / "broken-stub"
             with mock.patch.object(Path, "open", windows_default_open):
                 broken.write_text(_FAKE_PYTHON, encoding="utf-8")
-            broken.chmod(0o755)
             self.assertIn(b"\r\n", broken.read_bytes(), "эмуляция обязана давать CRLF")
             bash = _bash_executable()
             env = dict(os.environ, FAKE_LOG_DIR=_bash_path(bash, str(case)))
-            r_broken = subprocess.run(
-                [bash, "-c", 'exec "$1" --probe', "probe", _bash_path(bash, str(broken))],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            self.assertNotEqual(
-                r_broken.returncode, 0, "CRLF-stub ('bash\\r') не должен запускаться"
-            )
 
-            # Фактическое исполнение настоящего stub через shebang.
+            # Фактическое исполнение настоящего LF-stub через shebang.
             result = subprocess.run(
                 [
                     bash,
