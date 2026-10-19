@@ -1,0 +1,29 @@
+SQLite — public domain
+======================
+
+Текст извлечён дословно из заголовка sqlite3.h upstream-исходника
+sqlite-autoconf-3540100.tar.gz (SQLite 3.54.1, sqlite.org, каталог 2026;
+SHA-256 926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e,
+SHA3-256 сверен со страницей загрузки sqlite.org).
+
+Официальное заявление о правах: https://www.sqlite.org/copyright.html
+(The author disclaims copyright to this source code — код передан в
+public domain.)
+
+------------------------------------------------------------------------
+/*
+** 2001-09-15
+**
+** The author disclaims copyright to this source code.  In place of
+** a legal notice, here is a blessing:
+**
+**    May you do good and not evil.
+**    May you find forgiveness for yourself and forgive others.
+**    May you share freely, never taking more than you give.
+**
+*************************************************************************
+*/
+
+Также используется версия SQLite, собранная с --enable-fts5 (FTS5 входит
+в ту же лицензию public domain; расширение FTS5 не имеет отдельных
+лицензионных условий).

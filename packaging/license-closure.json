@@ -1,0 +1,170 @@
+{
+  "schema_version": 2,
+  "notes": "Машинный licensing-гейт portable-сборки (tools/build_portable.py::verify_license_closure), схема 2 — статический контракт покрытия: components описывает компоненты (лицензия, файл уведомления под packaging/licenses/, строго булев distribution_ok), coverage сопоставляет относительные POSIX-пути (точные или fnmatch-шаблоны) одному компоненту ИЛИ набору компонентов — составной executable (собственный код + встроенный загрузчик PyInstaller) и составные модули расширений (CPython + статически вкомпилированные сторонние части: _decimal = CPython+libmpdec, _sha2/_sha3/_blake2 = CPython+HACL*, _hashlib/_ssl = CPython+OpenSSL) выражаются списком и требуют разрешения каждого включённого компонента. Гейт рекурсивно инвентаризирует фактическое дерево (исполнимый файл target, *.so*/*.dll/*.dylib/*.pyd на любой глубине, base_library.zip, файлы с ELF-magic) и требует однозначного покрытия каждой позиции; distribution_ok обязан быть JSON true (строки не принимаются); объявленные уведомления копируются в комплект. Неиспользуемые компоненты проверяться не обязаны. СОСТОЯНИЕ ПОСЛЕ NATIVE-ПРИЁМКИ 2026-10-18 (rootless-билдер Ubuntu 22.04, разрешение пользователя): закрытие Linux ЗАВЕРШЕНО по фактическому инвентарю принятой сборки linux-x86_64 — distribution_ok=true проставлено ровно компонентам фактического состава (собственный код; загрузчик PyInstaller с его исключением для упакованных приложений; CPython PSF-runtime; SQLite 3.54.1 public domain; OpenSSL 3.0.2 Apache-2.0; zlib; bzip2; XZ/liblzma; libffi; статически вкомпилированные libmpdec BSD-2 и HACL* MIT) с приложенными полными текстами уведомлений. Компоненты НЕ входящие в принятую сборку остаются false и блокируют комплект при появлении в инвентаре: readline-gpl (GPL-3.0 — сборка отключает readline конфигом и без dev-пакета), ncurses, zstd, brotli, expat (pyexpat/_elementtree в комплект не попадают; текст приложен на случай будущих сборок). Windows/macOS-сборки не выполнялись — их фактический состав не инвентаризировался, никаких заявлений о них манифест не делает (sqlite-pin этих target в toolchain.json остаётся null и блокирует их выпуск). Атрибуция: base_library.zip и lib-dynload — модули CPython (PSF), собранные PyInstaller; загрузчик PyInstaller встроен в исполнимый файл; libpython3.14.so.1.0 — CPython (PSF). Заполнять distribution_ok=true без инвентаризации фактического состава запрещено.",
+  "components": {
+    "keklib-cli": {
+      "license": "Proprietary (собственный код keklib-cli; условия распространения определяет владелец проекта)",
+      "notice": "licenses/keklib-cli/NOTICE.txt",
+      "distribution_ok": true,
+      "note": "решение владельца: данная portable-поставка выпускается владельцем проекта (native-приёмка задачи 11, 2026-10-18)"
+    },
+    "pyinstaller-bootloader": {
+      "license": "GPL с особым исключением для упакованных приложений (загрузчик PyInstaller, встроен в исполнимый файл)",
+      "notice": "licenses/pyinstaller/COPYING.txt",
+      "distribution_ok": true,
+      "note": "исключение в тексте PyInstaller прямо разрешает распространение упакованного приложения вместе с загрузчиком; текст приложен из копии wheel pyinstaller==6.22.3, зафиксированного хешами в packaging/requirements-build.lock; Python-часть PyInstaller в runtime не входит (сборка — onedir без неё)"
+    },
+    "cpython-runtime": {
+      "license": "Python Software Foundation License (CPython runtime: libpython3.14.so.1.0, модули расширений lib-dynload, stdlib-модули base_library.zip; CPython 3.14.8 из upstream-исходника python.org)",
+      "notice": "licenses/cpython/LICENSE.txt",
+      "distribution_ok": true,
+      "note": "PSF License разрешает распространение с сохранением уведомления — полный текст LICENSE CPython приложен (включает разделы CWI/CNRI/BeOpen/Zero-Clause BSD истории Python, покрывающие файлы с copyright CNRI: codecs.c, unicodectype.c, unicodeobject.c). Статически включённые сторонние части с собственными обязательными уведомлениями выделены в отдельные компоненты и обязаны быть разрешены вместе с cpython-runtime составным контрактом: dtoa/getopt/cfuhash/qsbr/secret-labs (libpython), mpdecimal (_decimal), hacl (_sha2/_sha3/_blake2/_md5/_sha1), openssl (_hashlib/_ssl)"
+    },
+    "dtoa": {
+      "license": "ISC-style notice (David M. Gay / Lucent Technologies) — требует включения полного уведомления во все копии и сопроводительную документацию",
+      "notice": "licenses/dtoa/NOTICE.txt",
+      "distribution_ok": true,
+      "note": "Python/dtoa.c статически в libpython3.14.so.1.0 принятой сборки (символы _Py_dg_dtoa/_Py_dg_strtod); уведомление извлечено дословно из заголовка файла pinned-исходника (review native round 1, P1)"
+    },
+    "getopt": {
+      "license": "Permissive notice (David Gottner, 1992-1994) — уведомление и дисклеймер должны присутствовать во всех копиях",
+      "notice": "licenses/getopt/NOTICE.txt",
+      "distribution_ok": true,
+      "note": "Python/getopt.c статически в libpython (символ _PyOS_GetOpt); текст извлечён из pinned-исходника"
+    },
+    "cfuhash": {
+      "license": "BSD (cfuhash, Copyright (c) 2005 Don Owens) — binary redistribution требует воспроизведения уведомления в документации",
+      "notice": "licenses/cfuhash/NOTICE.txt",
+      "distribution_ok": true,
+      "note": "Python/hashtable.c — реализация _Py_hashtable_t на основе cfuhash (символы _Py_hashtable_* в libpython); текст извлечён из pinned-исходника"
+    },
+    "qsbr": {
+      "license": "BSD-2 (Jeffrey Roberson <jeff@FreeBSD.org>, 2019-2020, техника GUS FreeBSD) — binary redistribution требует воспроизведения уведомления",
+      "notice": "licenses/qsbr/NOTICE.txt",
+      "distribution_ok": true,
+      "note": "Python/qsbr.c статически в libpython (символы _Py_qsbr_*); текст извлечён из pinned-исходника"
+    },
+    "secret-labs": {
+      "license": "Permissive notice (Copyright (c) 1999 Secret Labs AB / Fredrik Lundh) — уведомление должно присутствовать во всех копиях и supporting documentation",
+      "notice": "licenses/secretlabs/NOTICE.txt",
+      "distribution_ok": true,
+      "note": "Оригинальная реализация строкового типа в Objects/unicodeobject.c (статически в libpython); текст извлечён из pinned-исходника"
+    },
+    "sqlite": {
+      "license": "Public Domain (SQLite)",
+      "notice": "licenses/sqlite/license.txt",
+      "distribution_ok": true,
+      "note": "SQLite 3.54.1 собран из upstream-исходника sqlite.org с --enable-fts5; уведомление извлечено из заголовка sqlite3.h того же pinned-исходника; версия зафиксирована pin'ом toolchain.json и сверена release-гейтом"
+    },
+    "openssl": {
+      "license": "Apache-2.0 (OpenSSL 3.0.2: libcrypto.so.3, libssl.so.3, а также _hashlib/_ssl, слинкованные с ними)",
+      "notice": "licenses/openssl/NOTICE.txt",
+      "distribution_ok": true,
+      "note": "библиотеки Ubuntu 22.04 baseline (libssl3 3.0.2-0ubuntu1.30, Apache-2.0); NOTICE.txt = machine-readable copyright пакета + полный текст Apache-2.0 (обязательное приложение по ст. 4), извлечены из образа pinned digest"
+    },
+    "readline-gpl": {
+      "license": "GPL-3.0 (GNU Readline) — требует отдельного разбора bundling-условий",
+      "notice": null,
+      "distribution_ok": false,
+      "note": "НЕ входит в принятую сборку: builder не устанавливает readline и собирает CPython с --without-readline (packaging/builder/builder-pins.json, guard-тест tests/test_builder.py). Остается false: попадание readline в инвентарь любого target блокирует выпуск до явного решения"
+    },
+    "ncurses": {
+      "license": "X11 license (ncurses)",
+      "notice": null,
+      "distribution_ok": false,
+      "note": "не входит в принятую сборку (без readline ncurses не подтягивается); закрытие при появлении — по факту инвентаризации"
+    },
+    "zlib": {
+      "license": "Zlib License (libz.so.1; gzip/zipfile/tarfile и zlib-модуль CPython)",
+      "notice": "licenses/zlib/copyright.txt",
+      "distribution_ok": true,
+      "note": "zlib1g 1:1.2.11 (Ubuntu 22.04 baseline); уведомление — machine-readable copyright пакета из образа pinned digest"
+    },
+    "xz": {
+      "license": "Public Domain (XZ Utils / liblzma.so.5; lzma-модули CPython)",
+      "notice": "licenses/xz/copyright.txt",
+      "distribution_ok": true,
+      "note": "liblzma5 5.2.5-2ubuntu1.1 (Ubuntu 22.04 baseline); уведомление — machine-readable copyright пакета из образа pinned digest"
+    },
+    "bzip2": {
+      "license": "BSD (bzip2 / libbz2.so.1.0; bz2-модули CPython)",
+      "notice": "licenses/bzip2/copyright.txt",
+      "distribution_ok": true,
+      "note": "libbz2-1.0 1.0.8-5ubuntu0.1 (Ubuntu 22.04 baseline); уведомление — machine-readable copyright пакета из образа pinned digest"
+    },
+    "libffi": {
+      "license": "MIT (libffi.so.8; ctypes)",
+      "notice": "licenses/libffi/copyright.txt",
+      "distribution_ok": true,
+      "note": "libffi8 3.4.2-4 (Ubuntu 22.04 baseline); уведомление — machine-readable copyright пакета из образа pinned digest"
+    },
+    "mpdecimal": {
+      "license": "BSD-2-Clause (libmpdec, статически вкомпилирован в _decimal)",
+      "notice": "licenses/mpdecimal/COPYING.txt",
+      "distribution_ok": true,
+      "note": "libmpdec 2.5.1 vendored в исходнике CPython 3.14.8 (Modules/_decimal/libmpdec); уведомление извлечено из заголовка mpdecimal.h того же pinned-исходника; отдельной .so в комплекте нет"
+    },
+    "hacl": {
+      "license": "MIT (HACL*; статически вкомпилирован в _sha2/_sha3/_blake2)",
+      "notice": "licenses/hacl/LICENSE.txt",
+      "distribution_ok": true,
+      "note": "HACL* (Copyright (c) 2016-2022 INRIA, CMU and Microsoft Corporation; 2022-2023 HACL* Contributors) vendored в исходнике CPython 3.14.8 (Modules/_hacl); MIT-текст извлечён из заголовков файлов того же pinned-исходника"
+    },
+    "expat": {
+      "license": "MIT (Expat; vendored в исходнике CPython, pyexpat/_elementtree)",
+      "notice": "licenses/expat/COPYING.txt",
+      "distribution_ok": false,
+      "note": "в принятую сборку НЕ входит (pyexpat/_elementtree не попали в фактический инвентарь); текст приложен из Modules/expat/COPYING pinned-исходника на случай будущих составов"
+    },
+    "zstd": {
+      "license": "BSD/GPLv2 dual (zstd)",
+      "notice": null,
+      "distribution_ok": false,
+      "note": "в принятую сборку не входит; выбор ветки лицензии фиксируется при фактической инвентаризации"
+    },
+    "brotli": {
+      "license": "MIT (Brotli)",
+      "notice": null,
+      "distribution_ok": false,
+      "note": "в принятую сборку не входит"
+    }
+  },
+  "coverage": {
+    "keklib-cli": ["keklib-cli", "pyinstaller-bootloader"],
+    "keklib-cli.exe": ["keklib-cli", "pyinstaller-bootloader"],
+    "_internal/base_library.zip": "cpython-runtime",
+    "_internal/libpython*.so*": [
+      "cpython-runtime",
+      "dtoa",
+      "getopt",
+      "cfuhash",
+      "qsbr",
+      "secret-labs"
+    ],
+    "_internal/python*/lib-dynload/*": "cpython-runtime",
+    "_internal/python3.14/lib-dynload/_decimal.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "mpdecimal"],
+    "_internal/python3.14/lib-dynload/_sha2.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_sha3.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_blake2.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_md5.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_sha1.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "hacl"],
+    "_internal/python3.14/lib-dynload/_hashlib.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "openssl"],
+    "_internal/python3.14/lib-dynload/_ssl.cpython-314-x86_64-linux-gnu.so": ["cpython-runtime", "openssl"],
+    "_internal/libsqlite3.so*": "sqlite",
+    "_internal/libsqlite3.dll": "sqlite",
+    "_internal/libcrypto.so*": "openssl",
+    "_internal/libcrypto*.dll": "openssl",
+    "_internal/libssl.so*": "openssl",
+    "_internal/libssl*.dll": "openssl",
+    "_internal/libreadline.so*": "readline-gpl",
+    "_internal/libncursesw.so*": "ncurses",
+    "_internal/libz.so*": "zlib",
+    "_internal/zlib1.dll": "zlib",
+    "_internal/liblzma.so*": "xz",
+    "_internal/libbz2.so*": "bzip2",
+    "_internal/libffi.so*": "libffi",
+    "_internal/libmpdec.so*": "mpdecimal",
+    "_internal/libzstd.so*": "zstd",
+    "_internal/libbrotli*.so*": "brotli"
+  }
+}

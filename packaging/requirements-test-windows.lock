@@ -1,0 +1,21 @@
+# Test-only зависимости нативных Windows TTY-тестов (задача 10 плана).
+#
+# Назначение: ConPTY-harness `tests/harness/tty.py` на Windows использует
+# pywinpty; приложение `keklib_cli` и его runtime от этих пакетов НЕ зависят.
+#
+# Установка (только на Windows, в проектное окружение):
+#   .venv\Scripts\python.exe -m pip install -r packaging\requirements-test-windows.lock
+#
+# Зафиксированная версия (wheel cp310–cp315 win_amd64/win_arm64,
+# требует Python >= 3.10; опубликована 2025-02-03). Импортируемый модуль —
+# `winpty` (upstream pyproject: module-name = "winpty._winpty";
+# `from winpty import PtyProcess`), модуля `pywinpty` не существует:
+#   pywinpty==3.1.0
+#
+# Честный статус: на момент задачи 10 версия зафиксирована по данным PyPI,
+# но установка и прогон выполнялись только на Linux (POSIX PTY-путь);
+# нативная Windows-проверка этой зависимости — задача 12 плана.
+# На POSIX/Windows-профиль не влияет: маркер sys_platform исключает
+# установку вне Windows.
+
+pywinpty==3.1.0 ; sys_platform == "win32"

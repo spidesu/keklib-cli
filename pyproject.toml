@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "keklib-cli"
+version = "0.1.0"
+description = "Локальный CLI: поиск в обновляемом INPX и безопасное извлечение одного FB2"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+license = { text = "Proprietary" }
+
+[project.scripts]
+keklib-cli = "keklib_cli.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"

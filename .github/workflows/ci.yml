@@ -1,0 +1,50 @@
+# Исходный CI keklib-cli: полный набор тестов и байтовая компиляция
+# на Linux/Windows/macOS × CPython 3.11/3.14.
+#
+# Reusable: portable-конвейер (.github/workflows/portable.yml) вызывает этот
+# workflow через workflow_call и не выпускает комплекты без зелёных исходных
+# тестов. Windows-прогон требует test-only pywinpty из
+# packaging/requirements-test-windows.lock (маркер sys_platform сам делает его
+# no-op на других ОС); runtime-пакет от него не зависит.
+#
+# Frozen smoke реального portable-архива здесь НЕ выполняется: без артефакта
+# тест FrozenSmokeTests честно пропускается; изолированный smoke — отдельные
+# jobs в portable.yml на машинах без checkout исходников.
+
+name: source-tests
+
+on:
+  push:
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-15]
+        python: ["3.11", "3.14"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: CPython ${{ matrix.python }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Test-only зависимости (pywinpty на Windows по маркеру)
+        run: python -m pip install -r packaging/requirements-test-windows.lock
+      - name: Установка проекта (src-layout) в окружение job'а
+        run: python -m pip install .
+      - name: Проверка console entry point установленного пакета
+        run: keklib-cli --help
+      - name: Полный набор тестов
+        run: python -m unittest -v
+      - name: Байтовая компиляция
+        run: python -m compileall -q src tests tools packaging/entry.py packaging/builder/verify_runtime.py

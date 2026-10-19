@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Виртуальные окружения
+.venv/
+venv/
+
+# Сборка и приёмка
+build/
+dist/
+
+# Инструменты тестирования
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Portable-артефакты сборки (не коммитятся; контрольные суммы — рядом с ними)
+keklib-cli-*.tar.gz
+keklib-cli-*.zip
+*.sha256

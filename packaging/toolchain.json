@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "python_required": "3.14.8",
+  "notes": "Закреплённый сборочный toolchain portable-поставки; исполнение обязательно: tools/build_portable.py перед сборкой сверяет фактический CPython и установленные build-зависимости с python-пинами здесь и ==-пинами packaging/requirements-build.lock (verify_toolchain_preflight), а перед публикацией — метаданные runtime с полями ниже (verify_release_metadata). linux-x86_64: SQLite-pin 3.54.1 заполнен фактом инвентаризации на согласованном rootless-билдере Ubuntu 22.04 (packaging/builder/, разрешение пользователя 2026-10-18) и сверен гейтом с фактическим runtime; native_build_verified=true отражает принятый нативный выпуск только для этого target. Windows/macOS: sqlite остаётся null (без выдуманных значений — null блокирует выпуск соответствующего target fail-closed) до реальной нативной инвентаризации в задаче 12. Фактические версии каждой реальной сборки фиксируются в build-info.json комплекта.",
+  "targets": {
+    "linux-x86_64": {
+      "python": "3.14.8",
+      "pyinstaller": "6.22.3",
+      "setuptools": "84.0.0",
+      "sqlite": "3.54.1",
+      "native_build_verified": true,
+      "verified_on": "2026-10-18",
+      "note": "Нативная сборка принята 2026-10-18 в rootless-контейнере Podman на закреплённом образе Ubuntu 22.04.5 (digest sha256:98510ac0..., glibc 2.35-0ubuntu3.15): CPython 3.14.8 из upstream-исходника python.org (SHA-256 сверен с официальным SPDX SBOM релиза), SQLite 3.54.1 из upstream-исходника sqlite.org (SHA3-256 сверен со страницей загрузки), сборка с --enable-fts5, --without-readline (GPL-компоненты исключены), --disable-test-modules, --enable-shared (требование PyInstaller 6.x). Прогон конвейера: preflight → onedir-сборка → самопроверка точки входа (help/setup/index с FTS5) → glibc-гейт floor 2.35 без нарушений → release-гейт → лицензионный гейт по фактическому инвентарю → архив+SHA-256; дым распакованного комплекта в чистом образе Ubuntu 22.04 без инструментов сборки. Определение билдера: packaging/builder/ (пины+Containerfile), драйвер tools/build_in_container.py. Полный отчёт: .superpowers/sdd/2026-02-11-keklib-cli-portable/task-11-native-report.md."
+    },
+    "windows-x86_64": {
+      "python": "3.14.8",
+      "pyinstaller": "6.22.3",
+      "setuptools": "84.0.0",
+      "sqlite": null,
+      "native_build_verified": false,
+      "verified_on": null,
+      "note": "Нативная сборка не выполнялась (нет Windows-доступа); кросс-сборка из Linux запрещена. Spec/конвейер готовы, проверка — задача 12 на runner windows-2022."
+    },
+    "macos-x86_64": {
+      "python": "3.14.8",
+      "pyinstaller": "6.22.3",
+      "setuptools": "84.0.0",
+      "sqlite": null,
+      "native_build_verified": false,
+      "verified_on": null,
+      "note": "Нативная сборка не выполнялась (нет macOS-доступа); кросс-сборка запрещена. Проверка — задача 12 на runner macos-15-intel."
+    },
+    "macos-arm64": {
+      "python": "3.14.8",
+      "pyinstaller": "6.22.3",
+      "setuptools": "84.0.0",
+      "sqlite": null,
+      "native_build_verified": false,
+      "verified_on": null,
+      "note": "Нативная сборка не выполнялась (нет macOS-доступа); кросс-сборка запрещена. Проверка — задача 12 на runner macos-14."
+    }
+  }
+}

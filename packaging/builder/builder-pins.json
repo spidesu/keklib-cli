@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "notes": "Пины rootless-контейнерного baseline-билдера linux-x86_64 (native-продолжение задачи 11; явное разрешение пользователя на загрузку Ubuntu 22.04 и локальную сборку внутри собственного rootless-контейнера Podman, 2026-10-18). Образ — amd64-манифест docker.io/library/ubuntu:22.04, закреплённый digest'ом (сборка Containerfile всегда идёт от digest, не от плавающего тега). CPython 3.14.8 — upstream-исходник python.org; SHA-256 дополнительно сверяется с официальным SPDX SBOM того же релиза (Python-3.14.8.tgz.spdx.json, пакет SPDXRef-PACKAGE-cpython, значение совпадает). SQLite 3.54.1 — upstream sqlite.org (каталог года 2026); SHA3-256 сверен со значением, опубликованным на странице загрузки sqlite.org. GPL/ненужные зависимости исключены из состава сборки: readline (GPL-3.0) не ставится и отключается конфигом (--without-readline), ncurses/gdbm/tk не устанавливаются. libpython собирается общим (--enable-shared): этого требует PyInstaller 6.x (shared library required), libpython3.14.so.1.0 входит в комплект и закрывается компонентом cpython-runtime (PSF). apt-версии зависят от среза репозиториев jammy на момент сборки образа и фиксируются снимком dpkg внутрь образа (/opt/builder/apt-versions.txt) — полный срез не пинится, воспроизводимость по версиям обеспечивается записью снимка в отчёты сборки.",
+  "image": {
+    "reference": "docker.io/library/ubuntu@sha256:98510ac07bb4545e389be502a8918b385c018bfe4ceeb5ac7e0375c782268b04",
+    "digest": "sha256:98510ac07bb4545e389be502a8918b385c018bfe4ceeb5ac7e0375c782268b04",
+    "image_id": "sha256:cee13550f97b8a595506e8e4ca74263ba44924248779a4ba4f942e197652acff",
+    "os_release": "Ubuntu 22.04.5 LTS",
+    "glibc": "2.35-0ubuntu3.15",
+    "architecture": "amd64"
+  },
+  "sources": {
+    "cpython": {
+      "version": "3.14.8",
+      "url": "https://www.python.org/ftp/python/3.14.8/Python-3.14.8.tgz",
+      "sha256": "a65b20a728f169f4e66ae143f40b1bd3d33c38d770251663f627c9767b79b210",
+      "size_bytes": 31525240,
+      "spdx_url": "https://www.python.org/ftp/python/3.14.8/Python-3.14.8.tgz.spdx.json",
+      "spdx_sha256": "279c166796370957020d32d446b9da030cbd0b77739fc044215b45843b37ad58",
+      "spdx_cross_check": "SPDXRef-PACKAGE-cpython.checksums[SHA256] == sha256 (независимая сверка по официальному SBOM релиза)"
+    },
+    "sqlite": {
+      "version": "3.54.1",
+      "url": "https://www.sqlite.org/2026/sqlite-autoconf-3540100.tar.gz",
+      "sha256": "926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e",
+      "sha3_256": "b6ced585c750916b1052667239a12c25a7ff34e7f06e1e6e01ecb0427657d9c4",
+      "size_bytes": 3332984,
+      "sha3_cross_check": "SHA3-256 совпадает со значением страницы загрузки sqlite.org (download.html)"
+    }
+  },
+  "apt_packages": [
+    "build-essential",
+    "pkg-config",
+    "ca-certificates",
+    "curl",
+    "libssl-dev",
+    "zlib1g-dev",
+    "libffi-dev",
+    "libbz2-dev",
+    "liblzma-dev"
+  ],
+  "cpython_configure_flags": [
+    "--prefix=/opt/python",
+    "--enable-shared",
+    "--without-readline",
+    "--disable-test-modules",
+    "--with-ensurepip=install"
+  ],
+  "sqlite_configure_flags": [
+    "--prefix=/opt/sqlite",
+    "--enable-fts5"
+  ],
+  "builder_venv": "/opt/venv"
+}

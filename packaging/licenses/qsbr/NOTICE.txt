@@ -1,0 +1,44 @@
+qsbr (Jeffrey Roberson / FreeBSD) — BSD-2
+
+Извлечено дословно из Python/qsbr.c — safe memory reclamation, производная техники GUS FreeBSD (символы _Py_qsbr_*). исходника CPython 3.14.8 (Python-3.14.8.tgz, SHA-256 a65b20a728f169f4e66ae143f40b1bd3d33c38d770251663f627c9767b79b210). Код статически скомпилирован в libpython3.14.so.1.0 принятой сборки (подтверждено символами).
+
+/*
+ * Implementation of safe memory reclamation scheme using
+ * quiescent states.
+ *
+ * This is derived from the "GUS" safe memory reclamation technique
+ * in FreeBSD written by Jeffrey Roberson. It is heavily modified. Any bugs
+ * in this code are likely due to the modifications.
+ *
+ * The original copyright is preserved below.
+ *
+ * Copyright (c) 2019,2020 Jeffrey Roberson <jeff@FreeBSD.org>
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice unmodified, this list of conditions, and the following
+ *    disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+#include "Python.h"
+#include "pycore_interp.h"          // PyInterpreterState
+#include "pycore_pystate.h"         // _PyThreadState_GET()
+#include "pycore_qsbr.h"
+#include "pycore_tstate.h"          // _PyThreadStateImpl
+
+

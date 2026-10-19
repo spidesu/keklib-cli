@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "notes": "Четыре целевых target portable-поставки (общие ограничения плана). runner/runner_cpu — сборочные машины задачи 12 CI; baseline_os — проверяемая сборочная ОС каждого target, а не обещание поддержки более старых или клиентских ОС без отдельного native-прогона. minimum_glibc задаётся только для Linux (начальный baseline — Ubuntu 22.04 / glibc 2.35, не musl/Alpine) и проверяется сканером ELF по итоговому bundle: комплект с требованием выше floor не архивируется и не публикуется.",
+  "targets": {
+    "linux-x86_64": {
+      "system": "Linux",
+      "machine": "x86_64",
+      "runner": "ubuntu-22.04",
+      "runner_cpu": "x86_64",
+      "baseline_os": "Ubuntu 22.04",
+      "minimum_os": "Ubuntu 22.04 (glibc >= 2.35)",
+      "minimum_glibc": "2.35",
+      "archive_format": "tar.gz",
+      "executable": "keklib-cli"
+    },
+    "windows-x86_64": {
+      "system": "Windows",
+      "machine": "x86_64",
+      "runner": "windows-2022",
+      "runner_cpu": "x86_64",
+      "baseline_os": "Windows Server 2022",
+      "minimum_os": "Windows Server 2022 (сборочная ОС; клиентские минимумы Windows не проверялись)",
+      "minimum_glibc": null,
+      "archive_format": "zip",
+      "executable": "keklib-cli.exe"
+    },
+    "macos-x86_64": {
+      "system": "Darwin",
+      "machine": "x86_64",
+      "runner": "macos-15-intel",
+      "runner_cpu": "x86_64",
+      "baseline_os": "macOS 15 (Intel)",
+      "minimum_os": "macOS 15 Intel (сборочная ОС macos-15-intel; клиентские минимумы macOS не проверялись)",
+      "minimum_glibc": null,
+      "archive_format": "tar.gz",
+      "executable": "keklib-cli"
+    },
+    "macos-arm64": {
+      "system": "Darwin",
+      "machine": "arm64",
+      "runner": "macos-14",
+      "runner_cpu": "arm64",
+      "baseline_os": "macOS 14 (Apple Silicon)",
+      "minimum_os": "macOS 14 ARM64 (сборочная ОС macos-14; клиентские минимумы macOS не проверялись)",
+      "minimum_glibc": null,
+      "archive_format": "tar.gz",
+      "executable": "keklib-cli"
+    }
+  }
+}
