@@ -1646,44 +1646,113 @@ class LinuxCiBuilderRouteTests(unittest.TestCase):
                 self.assertEqual(_bash_path("bash", "/tmp/opencode/x"), "/tmp/opencode/x")
             run_mock.assert_not_called()
 
-    def test_execute_spawns_verified_bash_and_converts_log_dir(self):
-        """Shell-контракты исполняются верифицированным bash хоста.
+    def test_execute_spawn_boundary_windows_cygpath_posix_script(self):
+        """Граница spawn ``_execute``: Windows cygpath → script, POSIX script.
 
-        Spy только ЗАПИСЫВАЕТ argv и делегирует настоящему
-        subprocess.run: никакого текстового файла за native .exe (R2) —
-        спавнится ровно тот bash, который вернул _bash_executable() на
-        этой ОС (POSIX — bash хоста; Windows — верифицированный Git
-        Bash), FAKE_LOG_DIR идёт через _bash_path, fake python получает
-        точный argv.
+        Детерминированная эмуляция spawn-boundary на любой ОС (rereview-3
+        R3): прежний совмещённый real-spy с делегированием в настоящий
+        ``subprocess.run`` был passing только на POSIX — на Windows
+        настоящий ``_bash_path`` сам делает cygpath-вызов через
+        ``subprocess.run``, и старое требование «ровно один spawn» валило
+        исправный код обязательных Windows source-jobs. Real spawn здесь
+        нет вовсе: discovery замокан на явно заданный bash, ``_bash_path``
+        — настоящий под контролируемым ``os.name``, ``subprocess.run`` —
+        простой mock с ответами. Реальные shell-контракты (driver argv,
+        rootless podman, LF-stubs) остаются исполнением настоящего
+        верифицированного Bash хоста в своих тестах.
         """
         from unittest import mock
 
-        with tempfile.TemporaryDirectory(prefix="keklib-ci-plumb-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="keklib-ci-exec-") as tmp:
+            # Path-объекты создаются ДО подмены os.name: ни WindowsPath на
+            # Linux, ни наоборот — дальше только str()-значения.
             case = Path(tmp)
             bin_dir = case / "bin"
-            bin_dir.mkdir()
-            _write_fake(bin_dir, "python", _FAKE_PYTHON)
             script = "python --plumb-probe"
-            bash = _bash_executable()
-            real_run = subprocess.run
-            spawned: list[list[str]] = []
+            calls: list[tuple[list[str], dict]] = []
 
-            def spy_run(argv, *args, **kwargs):
-                spawned.append([str(item) for item in argv])
-                return real_run(argv, *args, **kwargs)
+            # --- Windows: cygpath-конвертация FAKE_LOG_DIR, затем script ---
+            win_bash = "C:/Program Files/Git/bin/bash.exe"
+            converted = "/c/Users/RUNNER~1/AppData/Local/Temp/keklib-ci-exec"
+            cygpath_answer = subprocess.CompletedProcess(
+                [win_bash, "-c", 'cygpath -u -- "$1"', "cygpath", str(case)],
+                0,
+                stdout=converted + "\n",
+                stderr="",
+            )
+            success = subprocess.CompletedProcess(
+                [win_bash, "-c", script], 0, stdout="", stderr=""
+            )
 
-            real_path = _bash_path
+            def windows_run(argv, *args, **kwargs):
+                argv = [str(item) for item in argv]
+                calls.append((argv, kwargs))
+                if argv[1:3] == ["-c", 'cygpath -u -- "$1"']:
+                    return cygpath_answer
+                return success
+
             with (
-                mock.patch("tests.test_release.subprocess.run", side_effect=spy_run),
+                mock.patch("os.name", "nt"),
                 mock.patch(
-                    "tests.test_release._bash_path", side_effect=real_path
-                ) as path_mock,
+                    "tests.test_release._bash_executable", return_value=win_bash
+                ),
+                mock.patch(
+                    "tests.test_release.subprocess.run", side_effect=windows_run
+                ),
             ):
-                result = self._execute(script, bin_dir=bin_dir, cwd=case)
-            self.assertEqual(result.returncode, 0, _bash_diag(result, bash))
-            self.assertEqual(spawned, [[bash, "-c", script]])
-            path_mock.assert_called_once_with(bash, str(case))
-            self.assertEqual(_fake_calls(case / "python.log"), [["--plumb-probe"]])
+                ok = self._execute(script, bin_dir=bin_dir, cwd=case)
+
+            self.assertEqual(
+                [argv for argv, _ in calls],
+                [
+                    [win_bash, "-c", 'cygpath -u -- "$1"', "cygpath", str(case)],
+                    [win_bash, "-c", script],
+                ],
+                "Windows: адресный cygpath FAKE_LOG_DIR, затем script",
+            )
+            self.assertIs(ok, success, "результат передаётся без перекраски")
+            _, script_kwargs = calls[1]
+            self.assertEqual(script_kwargs.get("cwd"), case)
+            self.assertIs(script_kwargs.get("capture_output"), True)
+            env = script_kwargs["env"]
+            self.assertEqual(env["FAKE_LOG_DIR"], converted)
+            self.assertEqual(env["PATH"].split(os.pathsep)[0], str(bin_dir))
+
+            # --- POSIX: только script, конвертация — тождество ---
+            calls.clear()
+            failure = subprocess.CompletedProcess(
+                ["bash", "-c", script], 1, stdout="", stderr="probe failure"
+            )
+
+            def posix_run(argv, *args, **kwargs):
+                argv = [str(item) for item in argv]
+                calls.append((argv, kwargs))
+                return failure
+
+            with (
+                mock.patch("os.name", "posix"),
+                mock.patch(
+                    "tests.test_release._bash_executable", return_value="bash"
+                ),
+                mock.patch(
+                    "tests.test_release.subprocess.run", side_effect=posix_run
+                ),
+            ):
+                failed = self._execute(script, bin_dir=bin_dir, cwd=case)
+
+            self.assertEqual(
+                [argv for argv, _ in calls],
+                [["bash", "-c", script]],
+                "POSIX: ровно один script-spawn без cygpath",
+            )
+            self.assertIs(failed, failure, "ошибка передаётся без перекраски")
+            self.assertEqual(failed.returncode, 1)
+            self.assertEqual(failed.stderr, "probe failure")
+            _, script_kwargs = calls[0]
+            self.assertEqual(script_kwargs.get("cwd"), case)
+            env = script_kwargs["env"]
+            self.assertEqual(env["FAKE_LOG_DIR"], str(case))
+            self.assertEqual(env["PATH"].split(os.pathsep)[0], str(bin_dir))
 
     def test_linux_build_runs_existing_driver_with_both_flags(self):
         """Linux-сборка — существующий драйвер билдера, не второй рецепт.
