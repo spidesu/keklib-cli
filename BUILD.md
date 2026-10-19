@@ -354,17 +354,20 @@ python3 -m venv .venv
 .venv/bin/python -m keklib_cli search --help
 ```
 
+Тестам сборочного tooling нужен `packaging` (разбор requirements-lock в
+`tools/build_portable.py:lock_pins`); тот же пин/хеши, что и в
+build-lock, — в отдельном файле. Установка обязательна ДО запуска
+тестов: в свежем venv без неё полный набор падает на знакомых ошибках
+отсутствующего `packaging` (как в первом CI):
+
+```bash
+.venv/bin/python -m pip install -r packaging/requirements-test-tooling.lock
+```
+
 Тесты (синтетические библиотеки во временных каталогах):
 
 ```bash
 TMPDIR=/tmp/opencode .venv/bin/python -m unittest -v
-```
-
-Тестам сборочного tooling нужен `packaging` (разбор requirements-lock);
-тот же пин/хеши, что и в build-lock, — в отдельном файле:
-
-```bash
-.venv/bin/python -m pip install -r packaging/requirements-test-tooling.lock
 ```
 
 Компиляция всех исходников и инструментов:
