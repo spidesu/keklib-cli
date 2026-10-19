@@ -42,6 +42,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from tests.portable import portable_mkdtemp  # noqa: E402
+
 from tools import build_portable as bp  # noqa: E402
 
 FOUR_TARGETS = {"linux-x86_64", "windows-x86_64", "macos-x86_64", "macos-arm64"}
@@ -1800,7 +1802,7 @@ class PyInstallerSubprocessEnvTests(unittest.TestCase):
         self.assertIsNone(facts["system_root"])
 
     def tmp_path(self) -> Path:
-        tmp = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        tmp = portable_mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
         return tmp
 
@@ -1955,7 +1957,7 @@ class NativeTargetsClosureTests(unittest.TestCase):
     maxDiff = None
 
     def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        self.tmp = portable_mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
 
     def _synthetic_bundle(self, target: str, paths: Sequence[str]) -> Path:

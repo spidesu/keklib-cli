@@ -26,8 +26,8 @@ import os
 import re
 import sqlite3
 import struct
+import subprocess
 import sys
-import tempfile
 import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -37,6 +37,8 @@ from unittest import mock
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from tests.portable import portable_mkdtemp  # noqa: E402
 
 from tools import build_portable as bp  # noqa: E402
 from tools import inventory_runtime as ir  # noqa: E402
@@ -175,7 +177,7 @@ class PendingTargetsTests(unittest.TestCase):
 
     def test_refuses_non_pending_target_before_native_check(self):
         """Linux уже принят (не pending): отказ до любых тяжёлых стадий."""
-        out = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        out = portable_mkdtemp()
         self.addCleanup(lambda: os.rmdir(out))
         native = mock.Mock()
         with mock.patch.object(bp, "assert_native_target", native):
@@ -187,7 +189,7 @@ class PendingTargetsTests(unittest.TestCase):
         native.assert_not_called()
 
     def test_refuses_unknown_target(self):
-        out = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        out = portable_mkdtemp()
         self.addCleanup(lambda: os.rmdir(out))
         with self.assertRaises(bp.PackagingError):
             ir.inventory_runtime("plan9-arm", source_sha=VALID_SHA, output=out)
@@ -226,7 +228,7 @@ class SourceShaTests(unittest.TestCase):
                 ir.resolve_source_sha(bad)
 
     def test_sha_required_before_native_and_preflight(self):
-        out = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        out = portable_mkdtemp()
         self.addCleanup(lambda: os.rmdir(out))
         native = mock.Mock()
         with mock.patch.dict(os.environ, {}, clear=False):
@@ -241,7 +243,7 @@ class SourceShaTests(unittest.TestCase):
 
 class OrderAndCleanupTests(unittest.TestCase):
     def test_native_gate_precedes_preflight(self):
-        out = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        out = portable_mkdtemp()
         self.addCleanup(lambda: os.rmdir(out))
         preflight = mock.Mock()
         with mock.patch.object(
@@ -261,7 +263,7 @@ class OrderAndCleanupTests(unittest.TestCase):
         sentinel = build_dir / "not-inventory-sentinel"
         sentinel.mkdir(exist_ok=True)
         before = {p.name for p in build_dir.glob("inventory-*")}
-        out = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        out = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(out))
         with patched_stages():
             report = ir.inventory_runtime(
@@ -282,7 +284,7 @@ class ReportContractTests(unittest.TestCase):
     TARGET = "windows-x86_64"
 
     def setUp(self):
-        self.out = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        self.out = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(self.out))
         toolchain = PROJECT_ROOT / "packaging" / "toolchain.json"
         self.toolchain_before = toolchain.read_bytes()
@@ -516,7 +518,7 @@ class ReportContractTests(unittest.TestCase):
 
     def test_symlink_entries_recorded_without_hash(self):
         try:
-            staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+            staging = portable_mkdtemp()
         except OSError as exc:  # pragma: no cover
             self.skipTest(f"временный каталог недоступен: {exc}")
         self.addCleanup(lambda: _rmtree(staging))
@@ -536,7 +538,7 @@ class ReportContractTests(unittest.TestCase):
 
 class ReportAtomicityTests(unittest.TestCase):
     def test_refuses_overwrite_existing_report(self):
-        out = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        out = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(out))
         target = "inventory-report-windows-x86_64.json"
         existing = out / target
@@ -553,7 +555,7 @@ class ReportAtomicityTests(unittest.TestCase):
         self.assertEqual(leftovers, [], "временные файлы убираются при отказе")
 
     def test_failed_publish_leaves_no_report(self):
-        out = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        out = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(out))
         with patched_stages(), mock.patch.object(
             bp,
@@ -615,18 +617,70 @@ class DepsProbeTests(unittest.TestCase):
         )
 
     def test_macho_probe_never_raises(self):
-        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        staging = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(staging))
         fake = staging / "lib.cpython-314-darwin.dylib"
         fake.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 64)
         result = ir.macho_deps(fake)
         self.assertIsInstance(result, dict)
         self.assertIn("available", result)
+        self.assertIsInstance(result["available"], bool)
+        if result["available"]:
+            # otool существует и запущен: rc == 0 → output, иначе →
+            # записанный returncode + error (валидность входа — не признак
+            # наличия инструмента).
+            if result.get("returncode"):
+                self.assertIn("error", result)
+            else:
+                self.assertIn("output", result)
+        else:
+            self.assertIn("error", result)
+
+    def test_macho_probe_missing_tool_contract(self):
+        """Контракт «инструмент отсутствует»: available False + причина.
+
+        Граница независима от окружения: mock ``shutil.which`` → None —
+        единственный случай, когда проба Mach-O недоступна.
+        """
+        staging = portable_mkdtemp()
+        self.addCleanup(lambda: _rmtree(staging))
+        fake = staging / "lib.cpython-314-darwin.dylib"
+        fake.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 64)
+        with mock.patch("shutil.which", return_value=None):
+            result = ir.macho_deps(fake)
         self.assertFalse(result["available"])
         self.assertIn("error", result)
+        self.assertNotIn("returncode", result)
+
+    def test_macho_probe_present_tool_nonzero_is_available(self):
+        """Контракт «инструмент существует, вход невалиден»: available True.
+
+        ``available`` — факт наличия и запуска otool, не корректность
+        входного файла: ненулевой код (например, на не-Mach-O .py)
+        записывается как returncode + error, проба не падает. Реальный Mac
+        CI (run 39271547601) опроверг ожидание available False, выведенное
+        из Linux-окружения без otool.
+        """
+        staging = portable_mkdtemp()
+        self.addCleanup(lambda: _rmtree(staging))
+        fake = staging / "not_macho.py"
+        fake.write_bytes(b"print('hi')\n")
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="object is not a Mach-O"
+        )
+        with mock.patch(
+            "shutil.which", return_value="/usr/bin/otool"
+        ), mock.patch.object(
+            ir.subprocess, "run", return_value=completed
+        ) as run:
+            result = ir.macho_deps(fake)
+        self.assertTrue(result["available"])
+        self.assertEqual(result["returncode"], 1)
+        self.assertIn("error", result)
+        run.assert_called_once()
 
     def test_pe_probe_never_raises(self):
-        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        staging = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(staging))
         fake = staging / "sqlite3.dll"
         fake.write_bytes(_fake_pe_bytes())
@@ -639,7 +693,7 @@ class DepsProbeTests(unittest.TestCase):
 
 class CollectTocTests(unittest.TestCase):
     def test_parse_and_match(self):
-        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        staging = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(staging))
         _write_collect_toc(
             staging,
@@ -663,7 +717,7 @@ class CollectTocTests(unittest.TestCase):
         (``workpath = join(workpath, specnm)``); поиск только в корне
         workpath возвращал пустой словарь и терял provenance целиком.
         """
-        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        staging = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(staging))
         _write_collect_toc(
             staging / "keklib-cli",
@@ -680,7 +734,7 @@ class CollectTocTests(unittest.TestCase):
         (самого префикса в dest нет) — сопоставление обязано учитывать
         обе формы.
         """
-        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        staging = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(staging))
         _write_collect_toc(
             staging,
@@ -712,7 +766,7 @@ class CollectTocTests(unittest.TestCase):
         fallback по basename подставил бы чужой src при коллизии имён;
         неподтверждённый provenance обязан быть null, а не угаданным.
         """
-        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        staging = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(staging))
         _write_collect_toc(
             staging,
@@ -722,7 +776,7 @@ class CollectTocTests(unittest.TestCase):
         self.assertIsNone(ir._provenance_for("_internal/_sha2.pyd", mapping))
 
     def test_malformed_toc_ignored(self):
-        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        staging = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(staging))
         (staging / "COLLECT-00.toc").write_text("not python {", encoding="utf-8")
         self.assertEqual(ir.collect_toc_sources(staging), {})
@@ -731,7 +785,7 @@ class CollectTocTests(unittest.TestCase):
 
 class RuntimeLicensesTests(unittest.TestCase):
     def test_known_locations_only_exact_names(self):
-        root = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        root = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(root))
         (root / "LICENSE.txt").write_text("psf license text", encoding="utf-8")
         (root / "unrelated.txt").write_text("noise", encoding="utf-8")
@@ -762,7 +816,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
 
     def test_error_returns_one(self):
-        out = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        out = portable_mkdtemp()
         self.addCleanup(lambda: os.rmdir(out))
         stderr = io.StringIO()
         with mock.patch.dict(os.environ, {}, clear=False):
@@ -780,7 +834,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("source", stderr.getvalue().lower())
 
     def test_success_prints_resolved_report_path(self):
-        out = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        out = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(out))
         stdout = io.StringIO()
         with patched_stages(), redirect_stdout(stdout):
@@ -945,7 +999,7 @@ class PeVersionInfoTests(unittest.TestCase):
         return module
 
     def test_nested_stringfileinfo_bytes_extracted(self):
-        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        staging = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(staging))
         target = staging / "sqlite3.dll"
         target.write_bytes(_fake_pe_bytes())
@@ -961,7 +1015,7 @@ class PeVersionInfoTests(unittest.TestCase):
         self.assertEqual(version["strings"]["LegalCopyright"], "public domain")
 
     def test_version_info_null_when_no_resources(self):
-        staging = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        staging = portable_mkdtemp()
         self.addCleanup(lambda: _rmtree(staging))
         target = staging / "plain.dll"
         target.write_bytes(_fake_pe_bytes())

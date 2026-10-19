@@ -342,11 +342,15 @@ def macho_deps(path: Path) -> dict[str, object]:
     except (OSError, subprocess.SubprocessError) as exc:
         return {"tool": "otool -L", "available": False, "error": str(exc)}
     if result.returncode != 0:
+        # «available» — факт наличия и запуска otool, не валидность
+        # входного файла: ненулевой код (например, не-Mach-O вход)
+        # записывается как факт рядом с returncode и error.
         return {
             "tool": "otool -L",
-            "available": False,
+            "available": True,
             "returncode": result.returncode,
-            "error": result.stderr.strip() or "otool завершился с ошибкой",
+            "error": result.stderr.strip()
+            or f"otool завершился с кодом {result.returncode}",
         }
     return {
         "tool": "otool -L",
