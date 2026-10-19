@@ -1332,8 +1332,11 @@ def _step_condition(job_text: str, step_name: str) -> str | None:
 
 
 def _write_fake(bin_dir: Path, name: str, body: str) -> None:
+    # Bash-stubs пишутся точными UTF-8/LF-байтами (R1): текстовая запись по
+    # умолчанию переводит '\n' в os.linesep — на Windows это CRLF, shebang
+    # становится 'bash\r', и fake-команда не запускается вовсе.
     path = bin_dir / name
-    path.write_text(body, encoding="utf-8")
+    path.write_bytes(body.encode("utf-8"))
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
@@ -1575,6 +1578,76 @@ class LinuxCiBuilderRouteTests(unittest.TestCase):
         )
         for target in ("windows-x86_64", "macos-x86_64", "macos-arm64"):
             self.assertEqual(toolchain[target]["sqlite"], "3.50.4", target)
+
+    def test_fake_bash_stubs_forced_lf_bytes(self):
+        """Bash-stubs пишутся точными LF-байтами, CRLF ломает shebang (R1, P1).
+
+        ``Path.write_text`` без явного ``newline`` переводит ``\\n`` в
+        ``os.linesep`` — на Windows это CRLF, ``/usr/bin/env`` получает
+        ``bash\\r``, fake-команды не запускаются и обязательные Windows
+        source-jobs падают (а с ними build/smoke/gate всего конвейера).
+        Регрессия детерминированно эмулирует Windows-преобразование на
+        Linux: все записи перехватываются на ``Path.open`` → чистый
+        ``_pyio`` с ``os.linesep='\\r\\n'`` (``_pyio`` читает ``os.linesep``
+        в момент открытия, в отличие от кэширующего C ``_io``). Старая
+        запись по умолчанию на этой эмуляции даёт CRLF-байты и тест
+        падает; ``write_bytes`` от эмуляции не зависит. Контроль эмуляции
+        воспроизводит доказательство reviewer'а: CRLF-stub не исполняется.
+        """
+        import _pyio
+        from unittest import mock
+
+        def windows_default_open(self: Path, mode: str = "r", *args: object, **kwargs: object):
+            with mock.patch("os.linesep", "\r\n"):
+                return _pyio.open(self, mode, *args, **kwargs)  # type: ignore[arg-type]
+
+        bodies = {"python": _FAKE_PYTHON, "sudo": _FAKE_SUDO, "podman": _FAKE_PODMAN}
+        with tempfile.TemporaryDirectory(prefix="keklib-ci-stubs-") as tmp:
+            case = Path(tmp)
+            bin_dir = case / "bin"
+            bin_dir.mkdir()
+            # Запись stub'ов под Windows-эмуляцией: старый write_text по
+            # умолчанию здесь обязан дать CRLF и провалить точные байты.
+            with mock.patch.object(Path, "open", windows_default_open):
+                for name, body in bodies.items():
+                    _write_fake(bin_dir, name, body)
+            for name, body in bodies.items():
+                content = (bin_dir / name).read_bytes()
+                self.assertEqual(
+                    content,
+                    body.encode("utf-8"),
+                    f"{name}: bash-stub обязан быть точными LF-байтами body",
+                )
+                self.assertNotIn(b"\r", content, f"{name}: CR в bash-stub")
+                self.assertEqual(content.split(b"\n")[0], b"#!/usr/bin/env bash", name)
+
+            # Контроль эмуляции (доказательство R1): та же текстовая запись
+            # по умолчанию действительно даёт CRLF, и такой stub не исполняется.
+            broken = case / "broken-stub"
+            with mock.patch.object(Path, "open", windows_default_open):
+                broken.write_text(_FAKE_PYTHON, encoding="utf-8")
+            broken.chmod(0o755)
+            self.assertIn(b"\r\n", broken.read_bytes(), "эмуляция обязана давать CRLF")
+            env = dict(os.environ, FAKE_LOG_DIR=str(case))
+            r_broken = subprocess.run(
+                ["bash", "-c", 'exec "$1" --probe', "probe", str(broken)],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(
+                r_broken.returncode, 0, "CRLF-stub ('bash\\r') не должен запускаться"
+            )
+
+            # Фактическое исполнение настоящего stub через shebang.
+            result = subprocess.run(
+                ["bash", "-c", 'exec "$1" --probe', "probe", str(bin_dir / "python")],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(_fake_calls(case / "python.log"), [["--probe"]])
 
     def test_smoke_and_gate_not_weakened_by_linux_route(self):
         """Изолированный smoke без checkout и выпускной гейт не задеты маршрутом."""
