@@ -1,285 +1,146 @@
 # Сборка keklib-cli
 
-Сборочная документация. Команды разработки проверены на нативном Linux
-(CachyOS, glibc 2.44, CPython 3.14.8); **нативная portable-сборка
-linux-x86_64 проверена в rootless-контейнере Podman на Ubuntu 22.04.5
-(glibc 2.35)** — принятый архив и полный отчёт ниже. Всё, что не
-проверено, помечено явно; фиктивных «проверенных» команд других
-платформ здесь нет.
+Сборочная документация: окружение разработки, сборка portable-архивов и
+гейты конвейера. Все команды приведены в форме Linux и проверены на
+Linux; непроверенные формы других платформ помечены явно — фиктивных
+«проверенных» команд здесь нет. Сборка строго нативная: кросс-сборка
+запрещена и отвергается инструментом до каких-либо действий.
 
-## Текущий статус
+## Окружение разработки (Linux, проверено)
 
-Конвейер portable-упаковки реализован и покрыт тестами: `packaging/`
-(spec PyInstaller onedir/console, targets/toolchain, залоченные
-сборочные зависимости, лицензионный манифест и уведомления, пины и
-Containerfile baseline-билдера) и `tools/build_portable.py` (preflight
-toolchain, сборка, самопроверка executable, glibc-гейт, release-гейт
-метаданных runtime, лицензионный гейт, атомарная упаковка без
-перезаписи, SHA-256, протокол публикации пары архив+сумма).
-
-**Принятый portable-артефакт существует для `linux-x86_64`**
-(финальная исправительная волна, 2026-10-18): сборка выполнена в
-rootless-контейнере Podman на закреплённом digest'ом образе Ubuntu 22.04.5
-с CPython 3.14.8 и SQLite 3.54.1 из upstream-исходников с проверенными
-хешами; все гейты прошли, архив и контрольная сумма опубликованы, дым
-распакованного комплекта выполнен в чистом образе Ubuntu 22.04 без
-инструментов сборки. Продуктовые правки волны: установка src-layout
-проекта в build-job CI (F1), точное зеркалирование лексики запроса и
-фактического токенизатора FTS5 unicode61 с повышением `RULES_VERSION`
-до 2 (F2), предметные `CatalogError` для повреждённого ZIP-контейнера
-INPX (F3) и SIZE вне диапазона SQLite INTEGER 0..2**63-1 (F4),
-best-effort ROLLBACK при отказе COMMIT поисковой сессии (F5). Windows
-и macOS: нативных сборок нет, пины SQLite этих target остаются `null` и
-`native_build_verified: false` — их выпуск до инвентаризации
-заблокирован fail-closed гейтами (кросс-сборка запрещена). Изолированный
-smoke принятого артефакта и выпускной гейт реализованы и выполнены на
-Linux (задача 12) — см. раздел «Изолированный smoke и выпускной гейт».
-
-Артефакт приёмки (локальный, не публикуется без отдельного разрешения);
-сводная таблица — фактический состав последней принятой сборки:
-
-```text
-keklib-cli-0.1.0-linux-x86_64.tar.gz  (final wave, 2026-10-18)
-  размер:      27 570 629 байт
-  SHA-256:     a0d6eb6a29905ec38ae8a05113b5a364af19b897045797221722b28760910ea2
-  build-info:  python 3.14.8, sqlite 3.54.1 (FTS5), pyinstaller 6.22.3,
-               rules_version 2, minimum_glibc 2.35 (Ubuntu 22.04)
-  состав:      keklib-cli (0755), _internal/, README.md, INSTALL.md,
-               THIRD_PARTY_NOTICES.md, build-info.json, licenses/
-               (16 уведомлений, включая обязательные уведомления
-               статических частей CPython: dtoa/getopt/cfuhash/qsbr/
-               Secret Labs с оригинальными copyright-строками)
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m keklib_cli --help
+.venv/bin/python -m keklib_cli search --help
 ```
 
-Суперседированные архивы сохранены без изменений и принятием не
-считаются: сборка задачи 11 fix round 2
-(`/tmp/opencode/portable-linux-out-r2/…`, SHA-256 `8aec5847531064acdd56327c1d72fd122ae103528282023a74c116cb1ac91240`)
-— предыдущая принятая ревизия без правок финальной волны F1–F5; первая
-сборка
-(`/tmp/opencode/portable-linux-out/…`, SHA-256 `86741449659d4f9e089eab908aa2258022e29ee91aacc77a4b611fbe4252b134`)
-— без уведомлений статических частей CPython (review native round 1);
-сборка fix round 1
-(`/tmp/opencode/portable-linux-out-r1/…`, SHA-256 `3c6761bc6bf843ddad6ceac45fb8d8b64352e35967292f91fceacea1ece912bd`)
-— в Secret Labs уведомлении отсутствовали оригинальные copyright-строки
-(review native rereview 1). 46 из 47 ELF-файлов текущей сборки побайтно
-идентичны r2 (идентичный toolchain); изменился только исполняемый файл
-загрузчика PyInstaller, встроивший исправленный Python-код.
+### Тестовые зависимости — до запуска тестов
 
-После финальной волны выполнена исправительная волна source CI
-(2026-10-19, см. раздел «CI» ниже): в текущем HEAD есть продуктовые
-правки, которых нет в принятом архиве, — канонизация спорных кодовых
-точек лексики поиска с повышением `RULES_VERSION` до 3 и корректный
-флаг Darwin `RENAME_EXCL` (0x4 по XNU). Принятый архив выше —
-предыдущая ревизия продукта (`rules_version 2`); пересборка portable в
-волне CI-исправлений не выполнялась и новой приёмки сборки нет.
+Тесты сборочного tooling импортируют `packaging.requirements` (через
+`tools/build_portable.py:lock_pins`). В свежем venv без этой зависимости
+полный набор тестов падает, поэтому установка обязательна **до** unittest
+(пин и хеши — точное подмножество `requirements-build.lock`, расхождение
+блокируется тестом):
 
-## Сборка portable linux-x86_64 в rootless-контейнере (проверено)
+```bash
+.venv/bin/python -m pip install -r packaging/requirements-test-tooling.lock
+```
 
-Baseline-билдер определён репозиторией: пины
+### Тесты и компиляция
+
+```bash
+.venv/bin/python -m unittest -v
+.venv/bin/python -m compileall -q src tests tools packaging/entry.py packaging/builder/verify_runtime.py
+```
+
+Вспомогательный инструментарий:
+
+- `tests/harness/tty.py` — нативный TTY-harness интеграционных тестов:
+  POSIX PTY (`pty`/`select`); Windows — ConPTY через test-only `pywinpty`
+  из `packaging/requirements-test-windows.lock` (нативная установка в
+  Windows-среде разработки не выполнялась).
+- `tools/verify_library.py` — явная приёмка реальной библиотеки
+  публичными компонентами: собственный workdir, отчёт JSON, источники
+  только читаются (байты INPX и выбранного ZIP сверяются до/после).
+
+## Зависимости: runtime и build-time
+
+- **Runtime** — только стандартная библиотека Python; конечному
+  пользователю ничего устанавливать не нужно.
+- **Build-time** — только на время сборки, ставятся в проектный `.venv`.
+  Точные `==`-версии и SHA-256 всех дистрибутивов зафиксированы в
+  `packaging/requirements-build.lock` (pyinstaller 6.22.3, altgraph
+  0.17.5, pyinstaller-hooks-contrib 2026.8, packaging 26.3, setuptools
+  84.0.0; `macholib`/`pefile`/`pywin32-ctypes` — маркеры своих ОС):
+
+```bash
+.venv/bin/python -m pip install -r packaging/requirements-build.lock
+```
+
+## Закреплённый toolchain и матрица target
+
+`packaging/toolchain.json`: пин CPython сборки (3.14.8) и версий
+build-зависимостей на каждый target; поле `sqlite` — пин версии SQLite
+включённого runtime. **Null-пин SQLite блокирует выпуск target**
+(release-гейт, см. ниже): пока версия не инвентаризована нативной
+сборкой, значение не заполняется и выпуск невозможен. Флаг
+`native_build_verified` отмечает target с завершённой нативной сборкой
+и приёмкой.
+
+| target | runner CI | формат | заявленный baseline сборки |
+| --- | --- | --- | --- |
+| `linux-x86_64` | `ubuntu-22.04` | tar.gz | Ubuntu 22.04, glibc >= 2.35 |
+| `windows-x86_64` | `windows-2022` | zip | Windows Server 2022 |
+| `macos-x86_64` | `macos-15-intel` | tar.gz | macOS 15 Intel |
+| `macos-arm64` | `macos-14` | tar.gz | macOS 14 ARM64 |
+
+Baseline — это проверяемая сборочная ОС, а не обещание более старых или
+клиентских выпусков: такие заявления требуют отдельного нативного
+прогона на целевой ОС и в этой документации не делаются.
+
+## Нативная сборка portable на хосте
+
+```bash
+.venv/bin/python tools/build_portable.py --target linux-x86_64 --output ./build/portable-out
+```
+
+Стадии: preflight toolchain → PyInstaller onedir (`packaging/
+keklib-cli.spec`, staging под `build/`) → документы и `build-info.json`
+→ самопроверка реальной точки входа (`--help`, `setup`,
+`index --refresh` с FTS5) → glibc-гейт → release-гейт метаданных →
+лицензионный гейт → упаковка и публикация пары архив+сумма (гейты —
+ниже). На хосте новее baseline glibc-гейт честно отказывает, перечисляя
+нарушающие ELF-файлы, — для релизных сборок используйте baseline-билдер
+следующего раздела. Существующие архивы и `.sha256` не перезаписываются,
+чужой `--output` не очищается. Формы Windows/macOS (нативные runner'ы,
+**не проверено**):
+
+```powershell
+# НЕ ПРОВЕРЕНО: выполняется на нативной Windows (runner windows-2022)
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -e .
+.venv\Scripts\python.exe -m pip install -r packaging\requirements-build.lock
+.venv\Scripts\python.exe tools\build_portable.py --target windows-x86_64 --output C:\build\portable-out
+```
+
+```bash
+# НЕ ПРОВЕРЕНО: выполняется на нативной macOS целевой архитектуры
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m pip install -r packaging/requirements-build.lock
+.venv/bin/python tools/build_portable.py --target macos-x86_64 --output ./build/portable-out
+```
+
+## Сборка linux-x86_64 в rootless-контейнере (проверено)
+
+Воспроизводимый baseline-билдер — часть репозитория: пины
 `packaging/builder/builder-pins.json` (digest образа Ubuntu 22.04,
-исходники CPython 3.14.8/SQLite 3.54.1 с хешами и независимыми сверками,
-apt-состав, конфиг-флаги), определение
-`packaging/builder/linux-x86_64.Containerfile`, проверки
-`packaging/builder/verify_runtime.py`, драйвер
-`tools/build_in_container.py`. Требования: rootless Podman, сеть для
-загрузки образа/исходников/зависимостей (все загрузки внутри
-контейнера, хеши проверяются). Проект монтируется только read-only,
-сборка идёт в одноразовой копии внутри контейнера, результат
-публикуется в один явный каталог вывода.
+исходники CPython/SQLite с хешами и независимыми сверками, apt-состав,
+конфиг-флаги `--without-readline`/`--enable-fts5`/`--enable-shared`),
+определение `packaging/builder/linux-x86_64.Containerfile`, проверки
+`packaging/builder/verify_runtime.py` (fail-closed), драйвер
+`tools/build_in_container.py`. Требования: rootless Podman и сеть для
+загрузки образа/исходников/зависимостей (все хеши проверяются).
+Проект монтируется только read-only, сборка идёт в одноразовой копии,
+результат публикуется в один явный каталог вывода:
 
 ```bash
 # Образ билдера (исходники скачиваются и проверяются при сборке образа)
-TMPDIR=/tmp/opencode .venv/bin/python tools/build_in_container.py --build-image
+.venv/bin/python tools/build_in_container.py --build-image
 
 # Полная сборка комплекта (все гейты tools/build_portable.py)
-TMPDIR=/tmp/opencode .venv/bin/python tools/build_in_container.py \
-    --build-bundle --output /tmp/opencode/portable-linux-out
+.venv/bin/python tools/build_in_container.py --build-bundle --output ./build/portable-out
 
-# Дым архива в чистом образе Ubuntu 22.04 (без инструментов сборки):
-# проверка SHA-256, распаковка, --help, setup, index --refresh (FTS5)
-TMPDIR=/tmp/opencode .venv/bin/python tools/build_in_container.py \
-    --smoke --output /tmp/opencode/portable-linux-out
+# Дым архива в чистом образе Ubuntu 22.04 без инструментов сборки:
+# SHA-256, распаковка, --help, setup, index --refresh (FTS5)
+.venv/bin/python tools/build_in_container.py \
+    --smoke --archive ./build/portable-out/keklib-cli-<version>-linux-x86_64.tar.gz
 ```
 
-Финальная волна собрана этой же командой с отдельным выводом
-`--output /tmp/opencode/portable-linux-out-final` (новый own-каталог,
-прежние каталоги не перезаписывались).
-
-Фактический порядок нативной приёмки 2026-10-18 (все гейты без
-обхода; полный вывод — в
-`.superpowers/sdd/2026-02-11-keklib-cli-portable/task-11-native-report.md`):
-
-1. прогон на состоянии «SQLite-pin ещё null»: preflight → onedir-сборка
-   → самопроверка точки входа (`--help`, `setup`, `index --refresh` с
-   FTS5) → **glibc-гейт floor 2.35: нарушений нет** → остановка
-   release-гейтом на null-пине (чистый отказ, как задумано);
-2. заполнение SQLite-pin фактом (3.54.1) → прогон 2: остановка
-   лицензионного гейта с **полным фактическим инвентарём** комплекта;
-3. лицензионное закрытие по этому инвентарю → прогон 3: все гейты
-   пройдены, архив + `.sha256` опубликованы;
-4. приёмка: `sha256sum -c` на хосте; дым в чистом `ubuntu:22.04`;
-   независимая сверка `readelf --version-info` всех 47 ELF-файлов
-   комплекта (максимум GLIBC_2.35 — совпало с собственным сканером
-   гейта; маркеров `GLIBC_ABI_DT_RELR` нет).
-
-Состав закрытия и пины: `sqlite: 3.54.1` + `native_build_verified:
-true` только у `linux-x86_64` в `packaging/toolchain.json`; Windows/macOS
-— без выдуманных значений (null блокирует их выпуск). Лицензионный
-манифест закрыт по фактическому составу: PSF (CPython + статические
-libmpdec/HACL*), public domain (SQLite, XZ), Apache-2.0 (OpenSSL),
-Zlib, BSD (bzip2), MIT (libffi, HACL*), исключение загрузчика
-PyInstaller; **GNU Readline (GPL-3.0) в сборку не входит** (builder
-отключает readline конфигом и не ставит dev-пакет) и остаётся
-заблокированным компонентом манифеста.
-
-Ограничение воспроизводимости: apt-срез jammy не пинируется по датам —
-вместо этого образ фиксирует снимок `dpkg-query -W`
-(`/opt/builder/apt-versions.txt`, ключевые версии: gcc 11.4.0,
-binutils 2.38, libssl3 3.0.2-0ubuntu1.30, libffi8 3.4.2-4,
-libbz2-1.0 1.0.8-5ubuntu0.1, liblzma5 5.2.5-2ubuntu1.1); CONFIG_ARGS
-CPython и версии pip-зависимостей — там же (`/opt/builder/`).
-
-## Изолированный smoke и выпускной гейт (задача 12, проверено на Linux)
-
-Test-only инструменты выпуска — не входят в пользовательскую поставку и
-не импортируют `keklib_cli`:
-
-- `tools/smoke_portable.py` — распаковка архива **только в новый
-  собственный workdir** собственным распаковщиком без `extractall`
-  (traversal/абсолютные пути/дубликаты/спецфайлы/жёсткие и внешние
-  ссылки отвергаются до касания диска; внутренние относительные symlink
-  Linux-onedir сохраняются), прогон **абсолютного frozen executable**
-  через нативный TTY (`--help`, `setup`, поиск с выбором номера,
-  обновление INPX, повторный поиск, SHA-256 обоих извлечённых FB2),
-  изоляция child как наблюдаемых условий (PATH без python — проверено
-  поиском исполняемых файлов и `shutil.which`; без `PYTHON*`; HOME/XDG/
-  AppData в собственном sandbox), read-only комплекта с реальной пробой
-  невозможности записи (`tests/harness/permissions.py`; запуск от root
-  честно отказывает, а не «зелёнеет»), состояние вне комплекта,
-  неизменность источников; отчёт `smoke-report.json` со строгими bool.
-  `minimum_os_verified` — наблюдение о хосте, а не условие smoke:
-  dev-хост может не быть baseline-ОС; отсутствие нативного подтверждения
-  минимума блокируется гейтом, а не подменяется успехом прогона.
-- `tools/release_gate.py` — `validate_reports` (ровно один успешный
-  основной отчёт на target, единая версия, host ОС/CPU target,
-  пересчитанное по фактам подтверждение заявленного минимума — более
-  новая/серверная ОС доказательством не принимается; строгие bool без
-  truthiness) и `--artifacts DIR` (архивы всех target по SHA-256 со
-  sidecar-суммами, build-info.json из архива, связь «отчёт ↔ архив» по
-  digest, `SHA256SUMS` без перезаписи и без какой-либо публикации).
-
-Фактические прогоны 2026-10-18 на принятом артефакте
-`8aec5847531064acdd56327c1d72fd122ae103528282023a74c116cb1ac91240`
-(обе версии r1 и r2 после fix round 1 review: `passed=true`, все флаги
-изоляции `true`, оба этапа `source_stage*_unchanged` `true`, FTS5,
-состояние вне комплекта; шаги help/setup/search/search_after_update
-— код 0). Актуальные доказательства — r2 (исправленные распаковщик и
-двухэтапное наблюдение источников):
-
-1. **Standalone smoke из harness-архива на dev-хосте** (CachyOS,
-   `/usr/bin/python3 -I`, без checkout-импортов): harness r2 собран
-   и распакован в чистый каталог, отчёт —
-   `/tmp/opencode/keklib-t12/standalone-smoke-r2/smoke-report.json`;
-   `minimum_os_verified=false` с честной причиной «хост не Ubuntu» —
-   dev-хост не доказывает baseline-минимум.
-2. **Baseline-смоук в контейнере** (rootless Podman, образ билдера на
-   закреплённом digest Ubuntu 22.04.5, `--userns=keep-id` — прогон не от
-   root, PTY внутри контейнера, python harness — `/opt/venv/bin/python
-   -I`, проект не монтировался): отчёт —
-   `/tmp/opencode/keklib-t12/container-smoke-r2/smoke/smoke-report.json`;
-   `os_id=ubuntu`, `os_version_id=22.04`, `host_glibc=2.35` и
-   **`minimum_os_verified=true`** («нативный baseline Ubuntu 22.04,
-   glibc 2.35 >= 2.35») — это и есть нативное подтверждение заявленного
-   минимума linux-x86_64.
-
-Выпускной гейт на реальном комплекте из одного linux-архива
-(копия артефакта + sidecar + отчёт baseline-смоука) — честный отказ:
-`release-gate: ОТКАЗ: … нет архива keklib-cli-<version>-windows-x86_64.zip`,
-код 1, `SHA256SUMS` не создаётся. Четыре Windows/macOS-прогона не
-выполнялись — подмены их отчётов нет.
-
-## CI (повторный нативный прогон: 4 из 6 зелёные; Windows — один фикстурный тест)
-
-`.github/workflows/ci.yml` (source-tests, reusable через
-`workflow_call`): Linux/Windows/macOS × CPython 3.11/3.14, полный
-unittest + compileall, test-only pywinpty из lock по маркеру платформы.
-`.github/workflows/portable.yml` (`workflow_dispatch`): вызывает
-source-tests, строит матрицу четырёх target **из targets.json**, нативно
-собирает комплекты, пакует отдельный вспомогательный harness-архив и
-запускает smoke-jobs **на новых машинах без checkout исходников**
-(скачиваются только harness и пользовательский артефакт), затем гейт по
-`needs` всех source/build/smoke — и только после успеха проверенные
-артефакты и `SHA256SUMS`. Публичный GitHub Release и подписи не
-создаются. Действия зафиксированы по commit SHA, права минимальные
-(`contents: read`).
-
-Первый фактический прогон source-tests (2026-10-19, push) упал на всех
-шести jobs на шаге unittest. Диагностика и исправительная волна
-(2026-10-19, ветка fix/source-ci):
-
-- **Test-tooling зависимость**: тесты сборочного tooling импортируют
-  `packaging.requirements` (через `tools/build_portable.py:lock_pins`),
-  которой нет в окружении job'а после установки одного runtime-проекта.
-  Source CI теперь ставит `packaging/requirements-test-tooling.lock`
-  (точное подмножество `requirements-build.lock`: та же версия и те же
-  SHA-256; расхождение блокируется тестом). Runtime-зависимостей у CLI
-  по-прежнему нет.
-- **Канонизация спорных кодовых точек поиска**: живой токенизатор
-  unicode61 менял статус U+FFFE/U+FFFF между версиями SQLite (3.45.1
-  CI-сборок — разделители, 3.54.0 — символы токена), из-за чего живая
-  сверка таблиц лексики падала на всех шести jobs. `normalize` теперь
-  симметрично вырезает U+FFFE/U+FFFF и весь диапазон суррогатов до
-  FTS/MATCH (закрыта и давняя проблема полного surrogate-диапазона);
-  `RULES_VERSION` повышен до 3, прежние индексы перестраиваются
-  автоматически. Полный перебор alignment-теста сохранён.
-- **Константа Darwin**: `_RENAME_EXCL` приведён к официальному XNU
-  `0x00000004` (было 0x40, из-за чего нативный macOS получал EINVAL во
-  всех fallback-публикациях). Небезопасный replace-fallback не добавлен.
-- **Координаты tar-ссылок**: относительная цель внутренней symlink
-  вычисляется в одной канонической системе координат (resolved-цель и
-  resolved-родитель) и хранится POSIX-формой; диагностики валидации
-  комплекта — относительными POSIX-путями на любой ОС.
-- **Переносимость тестов**: чтение UTF-8-вывода subprocess с явной
-  кодировкой, канонические сравнения путей (realpath) вместо строковых
-  (macOS `/var`→`/private/var`, Windows short/long и `\\?\` в readlink),
-  короткоживущий SQLite-reader в тестах индексатора до пересборки,
-  execute-bit только как Unix-гарантия, CRLF-нейтральная проверка
-  доверенных переводов строк, контракт native-Path для argv
-  Linux-билдера. ConPTY-сценарий разрыва приглашения разделён по
-  транспорту: POSIX проверяет байтовый разрыв внутри кодовой точки,
-  Windows — Unicode-разрыв по границе символа (байтовый разрыв через
-  консоль непереносим); синтетический socket-тест принимает оба
-  легитимных исхода пробуждения reader (EOF либо ошибка закрытого
-  дескриптора EBADF/WSAENOTSOCK) с обязательным завершением потока и
-  закрытием дескрипторов.
-
-Локально волна проверена полным набором тестов и compileall в отдельном
-venv этого checkout (subprocess-импорты идут из текущего worktree), а
-лексика поиска — дополнительно в контейнере Ubuntu 24.04 со старым
-SQLite 3.45.1 (обе стороны расхождения дают одинаковый результат).
-
-Повторный нативный прогон source-tests координатором выполнен
-(2026-10-19,
-[run 39246201467](https://github.com/spidesu/keklib-cli/actions/runs/39246201467),
-тот же коммит): Ubuntu 24.04 и macOS 15 на обеих версиях CPython —
-SUCCESS (все прежние ошибки, включая Darwin fallback/ConPTY/SQLite/
-encoding, прошли); оба Windows-jobs — FAILURE ровно на одном тесте
-`tests/test_packaging.py::test_bundle_rejects_bad_links` (278 тестов,
-skip 12, без ERROR). Причина — в самой фикстуре, не в продукте:
-составная относительная symlink записывалась raw-строкой
-`../../../outside-secret` с «/», которую Win32-репарс не разрешает
-(WinError 123), поэтому валидация честно отвергала её как «битую»,
-а не как «покидает». Продуктовый fail-closed containment при этом
-не нарушался. Исправление (без продуктовых изменений): цель внешней
-относительной ссылки вычисляется `os.path.relpath` текущей ОС
-(добавлен контракт-тест фикстуры), а до вызова `archive_bundle` тест
-предусловием доказывает `resolve(strict=True)` ссылки в точный
-существующий внешний файл и сохраняет строгие требования: PackagingError
-«покидает», отсутствие опубликованных архива/суммы и неизменность байтов
-внешней цели. Зелёный статус всех шести jobs не заявляется — требуется
-следующий нативный прогон CI на новом коммите. Ожидаемо до инвентаризации
-SQLite: сборки Windows/macOS в portable-конвейере падают на release-гейте
-null-пина — это честное поведение, а не сбой.
+Ограничение воспроизводимости: apt-срез Ubuntu не пинируется по датам —
+образ фиксирует снимок `dpkg-query -W`, CONFIG_ARGS CPython и версии
+pip-зависимостей (в `/opt/builder/` внутри образа).
 
 ## Гейты конвейера (все fail-closed)
 
@@ -288,7 +149,7 @@ null-пина — это честное поведение, а не сбой.
    CPython обязан равняться пину `toolchain.json`, каждая применимая к
    платформе запись `requirements-build.lock` — быть установленной ровно
    в запиненной версии; расхождения toolchain.json ↔ lock — отказ.
-3. PyInstaller onedir по spec в собственный staging под `build/`.
+3. PyInstaller onedir по spec в собственном staging под `build/`.
 4. Документы и `build-info.json` (версии — фактические, floor — из
    targets.json).
 5. Самопроверка executable реальной точкой входа (`--help`, `setup`,
@@ -312,7 +173,12 @@ null-пина — это честное поведение, а не сбой.
    верхнеуровневые `.so*`/`.dll`/`.dylib` из `_internal`) сверяется с
    `license-closure.json`: полное покрытие, явное `distribution_ok`,
    существующие файлы уведомлений; уведомления копируются в `licenses/`
-   архива.
+   архива. Состав закрытия linux-билдера: PSF (CPython + статические
+   libmpdec/HACL*), public domain (SQLite, XZ), Apache-2.0 (OpenSSL),
+   Zlib, BSD (bzip2), MIT (libffi, HACL*), исключение загрузчика
+   PyInstaller; **GNU Readline (GPL-3.0) в сборку не входит** (builder
+   отключает readline конфигом) и остаётся заблокированным компонентом
+   манифеста.
 9. Упаковка: allowlist корня (исполнимый файл, `_internal`, README.md,
    INSTALL.md, THIRD_PARTY_NOTICES.md, build-info.json, опционально
    `licenses/`), полный обход дерева с проверкой типов записей и
@@ -348,139 +214,64 @@ inode неотличима), а удаление чужой записи нед�
 процесса** между двумя публикациями: может остаться архив без суммы;
 повторная сборка откажется перезаписывать существующий архив — сумма
 дописывается приведённой командой ремонта либо используется новый
-каталог. Crash-transaction гарантия не реализована и не заявляется.
+каталог. Crash-transaction гарантия не реализуется и не заявляется.
 
-## Матрица target (packaging/targets.json)
+## Изолированный smoke и выпускной гейт (test-only)
 
-| target | runner CI | формат | baseline |
-| --- | --- | --- | --- |
-| `linux-x86_64` | `ubuntu-22.04` | tar.gz | Ubuntu 22.04, glibc >= 2.35 (проверяется ELF-сканером по итоговому bundle и подтверждён нативным baseline-смоуком в контейнере Ubuntu 22.04.5) |
-| `windows-x86_64` | `windows-2022` | zip | Windows Server 2022 (сборочная ОС; клиентские минимумы не проверялись) |
-| `macos-x86_64` | `macos-15-intel` | tar.gz | macOS 15 Intel (сборочная ОС; не проверялась) |
-| `macos-arm64` | `macos-14` | tar.gz | macOS 14 ARM64 (сборочная ОС; не проверялась) |
+Инструменты выпуска не входят в пользовательскую поставку и не
+импортируют `keklib_cli`:
 
-Это исходные проверяемые baseline сборочных машин, а не обещание поддержки
-более старых/клиентских ОС без отдельного native-прогона. Клетки
-«не проверялась»/«не проверялись» означают отсутствие нативных прогонов —
-никаких предположений о клиентских минимумах эти строки не содержат.
+- `tools/smoke_portable.py` — изолированная проверка готового архива:
+  распаковка **только в новый собственный workdir** собственным
+  распаковщиком без `extractall` (traversal/абсолютные пути/дубликаты/
+  спецфайлы/жёсткие и внешние ссылки отвергаются до касания диска),
+  прогон **абсолютного frozen executable** через нативный TTY (`--help`,
+  `setup`, поиск с выбором номера, обновление INPX, повторный поиск,
+  SHA-256 обоих извлечённых FB2), изоляция child-среды (PATH без python,
+  без `PYTHON*`, собственные HOME/XDG/AppData/TMP), read-only комплекта
+  с реальной пробой невозможности записи, состояние вне комплекта,
+  неизменность источников; отчёт `smoke-report.json` со строгими bool.
+  `minimum_os_verified` — наблюдение о хосте, а не условие smoke:
+  отсутствие нативного подтверждения минимума блокируется гейтом, а не
+  подменяется успехом прогона.
 
-## Окружение разработки (Linux, проверено)
+  ```bash
+  .venv/bin/python tools/smoke_portable.py --archive <архив> --workdir <новый-каталог>
+  ```
 
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
-.venv/bin/python -m keklib_cli --help
-.venv/bin/python -m keklib_cli search --help
-```
+- `tools/release_gate.py` — выпускной гейт: ровно один успешный отчёт
+  smoke на target (единая версия, host ОС/CPU == target, пересчитанное
+  по фактам подтверждение заявленного минимума — более новая или
+  серверная ОС доказательством не принимается; строгие bool без
+  truthiness), архивы всех target со сверенными sidecar-суммами,
+  согласованность `build-info.json` из архива и связь «отчёт ↔ архив»
+  по digest, `SHA256SUMS` создаётся без перезаписи; публикация не
+  выполняется. На неполной матрице target гейт честно отказывает.
 
-Тестам сборочного tooling нужен `packaging` (разбор requirements-lock в
-`tools/build_portable.py:lock_pins`); тот же пин/хеши, что и в
-build-lock, — в отдельном файле. Установка обязательна ДО запуска
-тестов: в свежем venv без неё полный набор падает на знакомых ошибках
-отсутствующего `packaging` (как в первом CI):
+  ```bash
+  .venv/bin/python tools/release_gate.py --artifacts <каталог-архивов> --reports <каталог-отчётов>
+  ```
 
-```bash
-.venv/bin/python -m pip install -r packaging/requirements-test-tooling.lock
-```
+## CI (механизм)
 
-Тесты (синтетические библиотеки во временных каталогах):
+`.github/workflows/ci.yml` (source-tests, reusable через
+`workflow_call`): Linux/Windows/macOS × CPython 3.11/3.14, полный
+unittest + compileall, test-only pywinpty из lock по маркеру платформы.
+`.github/workflows/portable.yml` (`workflow_dispatch`): вызывает
+source-tests, строит матрицу четырёх target **из targets.json**, нативно
+собирает комплекты, пакует отдельный вспомогательный harness-архив и
+запускает smoke-jobs **на новых машинах без checkout исходников**
+(скачиваются только harness и пользовательский артефакт), затем гейт по
+`needs` всех source/build/smoke — и только после успеха проверенные
+артефакты и `SHA256SUMS`. Публичный GitHub Release и подписи не
+создаются. Действия зафиксированы по commit SHA, права минимальные
+(`contents: read`).
 
-```bash
-TMPDIR=/tmp/opencode .venv/bin/python -m unittest -v
-```
-
-Компиляция всех исходников и инструментов:
-
-```bash
-TMPDIR=/tmp/opencode .venv/bin/python -m compileall -q src tests tools packaging/entry.py
-```
-
-Нативный TTY-инструментарий: `tests/harness/tty.py` (POSIX PTY —
-`pty`/`select`; Windows — ConPTY через test-only `pywinpty` из
-`packaging/requirements-test-windows.lock`; нативная Windows-установка —
-задача 12). Приёмка реальной библиотеки — `tools/verify_library.py`
-(измерения — в `README.md`).
-
-## Сборочные зависимости portable (Linux, проверено)
-
-Только build-time, устанавливаются в проектный `.venv`; конечному
-пользователю не нужны. Точные `==`-версии и SHA-256 всех дистрибутивов
-зафиксированы в `packaging/requirements-build.lock` (по данным PyPI JSON
-API на 2026-10-18):
-
-```bash
-.venv/bin/python -m pip install -r packaging/requirements-build.lock
-```
-
-Фактически установлено и проверено: `pyinstaller==6.22.3`,
-`altgraph==0.17.5`, `pyinstaller-hooks-contrib==2026.8`,
-`packaging==26.3`, `setuptools==84.0.0` (венёвские `macholib`,
-`pefile`, `pywin32-ctypes` — только на своих ОС). Закреплённый
-интерпретатор сборки — CPython 3.14.8 (`packaging/toolchain.json`,
-поле `python`); версия SQLite включённого runtime фиксируется по факту
-сборки в `build-info.json` каждого комплекта (в пройденном прогоне —
-3.54.0 с FTS5).
-
-## Нативная сборка portable (Linux, проверена до glibc-гейта)
-
-```bash
-TMPDIR=/tmp/opencode .venv/bin/python tools/build_portable.py \
-    --target linux-x86_64 --output /tmp/opencode/portable-out
-```
-
-Команда проверена на текущем Linux-хосте. Стадии и фактический результат
-прогона 2026-10-18 (полный перечень гейтов — выше):
-
-1. preflight toolchain и проверка нативности target — ок;
-2. PyInstaller onedir по `packaging/keklib-cli.spec` в собственном
-   staging под `build/` — ок;
-3. README.md/INSTALL.md/THIRD_PARTY_NOTICES.md и `build-info.json` в
-   корень комплекта — ок;
-4. самопроверка executable через реальную точку входа (`--help`,
-   `setup`, `index --refresh` с FTS5-индексацией синтетической библиотеки
-   в изолированном sandbox) — ок;
-5. **glibc-гейт: отказ, код 1.** Сканер требований всех ELF-файлов
-   комплекта нашёл GLIBC 2.36–2.44 выше floor 2.35 (включая
-   `libpython3.14.so.1.0` → 2.38 и `libsqlite3.so.0` → 2.44). Архив не
-   создаётся, вывод перечисляет каждый файл; полный вывод прогона — в
-   `.superpowers/sdd/2026-02-11-keklib-cli-portable/task-11-report.md`.
-
-Гейт намеренно fail-closed: неизвестное имя версии GLIBC (например,
-`GLIBC_ABI_DT_RELR`, учитывается как glibc >= 2.36; `GLIBC_PRIVATE` —
-отказ), нечитаемый/усечённый ELF и повреждённые цепочки останавливают
-сборку, а не пропускаются молча. Существующий архив и `.sha256` не
-перезаписываются, чужой `--output` не очищается. На floor-совместимом
-builder выпуск дополнительно остановили бы release-гейт метаданных
-(null SQLite-pin) и лицензионный гейт — это заявленные blockers, а не
-случайные отказы.
-
-### Windows/macOS
-
-Проверенных команд нет: нативного доступа к этим ОС из текущего окружения
-не было. Форма команд (PowerShell) для задачи 12, **не проверена**:
-
-```powershell
-# НЕ ПРОВЕРЕНО: выполняется на нативной Windows (runner windows-2022)
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -e .
-.venv\Scripts\python.exe -m pip install -r packaging\requirements-build.lock
-.venv\Scripts\python.exe tools\build_portable.py --target windows-x86_64 --output C:\build\portable-out
-```
-
-macOS (zsh, для runner macos-15-intel / macos-14), **не проверено**:
-
-```bash
-# НЕ ПРОВЕРЕНО: выполняется на нативной macOS целевой архитектуры
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
-.venv/bin/python -m pip install -r packaging/requirements-build.lock
-TMPDIR=${TMPDIR:-/tmp} .venv/bin/python tools/build_portable.py \
-    --target macos-x86_64 --output ./build/portable-out
-```
-
-Эти шаблоны заполняются проверенными командами после реальных нативных
-прогонов (задача 12); создание spec-файла готовой сборкой платформы не
-считается.
+Зелёный source CI — это проверка исходников на матрице ОС/Python, а не
+приёмка portable-сборок (для неё требуются нативные smoke-отчёты и
+выпускной гейт). До инвентаризации SQLite сборки Windows/macOS в
+portable-конвейере ожидаемо останавливаются release-гейтом на null-пине
+— это честное поведение, а не сбой.
 
 ## Состав portable-архива
 
@@ -499,6 +290,6 @@ allowlist-ом и containment-проверками упаковщика.
 
 ## См. также
 
-- `README.md` — назначение и статус проекта.
-- `INSTALL.md` — установка (статус и планируемая форма).
+- `README.md` — назначение и доступность поставки.
+- `INSTALL.md` — установка и первый запуск.
 - `AGENTS.md` — правила проекта для разработчиков и агентов.
