@@ -300,6 +300,29 @@ source-tests, строит матрицу четырёх target **из targets.j
 portable-конвейере ожидаемо останавливаются release-гейтом на null-пине
 — это честное поведение, а не сбой.
 
+## Диагностическая инвентаризация pending-target (этап перед пинами)
+
+`.github/workflows/platform-inventory.yml` (`workflow_dispatch`):
+диагностический прогон на нативных стандартных runner'ах трёх
+pending-target (windows-x86_64/windows-2022, macos-x86_64/macos-15-intel,
+macos-arm64/macos-14) собирает факты фактического runtime для
+последующего закрепления SQLite-пинов и лицензионного закрытия. Локально
+на нативной для target ОС/CPU:
+
+    python tools/inventory_runtime.py --target windows-x86_64 \
+        --output inventory-dist --source-sha $(git rev-parse HEAD)
+
+Отчёт `inventory-report-<target>.json` помечен `diagnostic_only`: он не
+является acceptance, не устанавливает `native_build_verified`, не создаёт
+архив/release-asset и не меняет пины. В отчёт входят: source SHA,
+факты хоста и runtime (Python/SQLite/FTS5/OpenSSL/zlib/libffi), метаданные
+build-info, полный хешированный инвентарь диагностического onedir,
+нативные зависимости библиотек (`otool -L` на macOS, импорты и
+VERSION-ресурсы через pefile на Windows), provenance файлов по COLLECT TOC
+PyInstaller и тексты LICENSE установленного runtime из известных мест.
+Единственный CI-артефакт — сам отчёт; сырой комплект не загружается и
+удаляется вместе со staging.
+
 ## Состав portable-архива
 
 Корень архива — `keklib-cli/`: исполняемый файл (`keklib-cli` /

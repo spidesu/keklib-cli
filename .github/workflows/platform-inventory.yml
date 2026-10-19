@@ -1,0 +1,59 @@
+# Диагностическая runtime-инвентаризация pending-targets (native artifacts,
+# этап 1).
+#
+# На нативных стандартных runner'ах трёх pending-target из
+# packaging/targets.json создаётся диагностический onedir и собираются
+# фактические факты runtime: версии Python/SQLite/FTS5/OpenSSL/zlib/libffi,
+# метаданные build-info, полный хешированный инвентарь, нативные зависимости
+# библиотек (otool -L / pefile + VERSION-ресурсы), provenance COLLECT TOC и
+# тексты LICENSE установленного runtime.
+#
+# Отчёт diagnostic_only: он НЕ является acceptance, не устанавливает
+# native_build_verified, не заполняет нулевые SQLite-пины toolchain.json и
+# не создаёт release-asset. Выпускные гейты не вызываются и не меняются;
+# сырой комплект и его архив не загружаются — единственный артефакт это
+# inventory-report-<target>.json. Отказ job'а сохраняется в логах (отчёт не
+# публикуется), continue-on-error нет. Запуск только вручную
+# (workflow_dispatch); платные runners запрещены.
+
+name: platform-inventory
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            runner: windows-2022
+          - name: macos-x86_64
+            runner: macos-15-intel
+          - name: macos-arm64
+            runner: macos-14
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: CPython 3.14.8 (закреплённый toolchain)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14.8"
+      - name: Сборочные зависимости (точные пины с хешами)
+        run: python -m pip install -r packaging/requirements-build.lock
+      - name: Установка проекта (src-layout) в окружение job'а
+        run: python -m pip install .
+      - name: Диагностическая инвентаризация runtime (source SHA из GITHUB_SHA)
+        run: python tools/inventory_runtime.py --target ${{ matrix.name }} --output inventory-dist
+      - name: Опубликовать отчёт инвентаризации
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: inventory-report-${{ matrix.name }}
+          path: inventory-dist/inventory-report-${{ matrix.name }}.json
