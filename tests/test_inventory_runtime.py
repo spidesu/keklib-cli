@@ -60,6 +60,9 @@ REQUIRED_REUSE = {
     "build_info",
     "_run_selfcheck",
     "inventory_bundle_libraries",
+    # Контроль окружения сборки — общий helper/adapter из build_portable,
+    # а не собственная логика inventory-инструмента.
+    "pyinstaller_environment_facts",
 }
 
 #: Выпускные операции и гейты, которые диагностический инструмент Calling
@@ -307,7 +310,7 @@ class ReportContractTests(unittest.TestCase):
         report = json.loads(report_path.read_text(encoding="utf-8"))
 
         # Обязательные ключи и честные пометки диагностики.
-        self.assertEqual(report["schema_version"], 1)
+        self.assertEqual(report["schema_version"], 2)
         self.assertIs(report["diagnostic_only"], True)
         self.assertEqual(report["tool"]["name"], "inventory_runtime")
         self.assertEqual(report["source_sha"], VALID_SHA)
@@ -343,6 +346,43 @@ class ReportContractTests(unittest.TestCase):
         # Фактические метаданные build-info пробрасываются как есть.
         self.assertEqual(report["build_info"]["sqlite"], "3.9.3-synthetic")
         self.assertIs(report["selfcheck"]["passed"], True)
+
+        # Контроль окружения сборки: фактический PATH child-процесса
+        # PyInstaller и PATH родителя — доказательство исключения чужих
+        # каталогов (Java_Temurin) на нативном повторе. Факты собираются
+        # общим helper'ом build_portable, а не самим инструментом.
+        build_env = report["build_environment"]
+        self.assertEqual(build_env["platform"], sys.platform)
+        self.assertEqual(
+            build_env["policy"],
+            "windows-restricted-path"
+            if sys.platform == "win32"
+            else "inherit-parent",
+        )
+        self.assertEqual(build_env["python_executable"], sys.executable)
+        self.assertEqual(build_env["parent_path"], os.environ.get("PATH", ""))
+        if sys.platform == "win32":
+            from pathlib import PureWindowsPath
+
+            root = os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT")
+            exe_parent = PureWindowsPath(sys.executable).parent
+            self.assertEqual(
+                build_env["subprocess_path_entries"],
+                [
+                    str(exe_parent),
+                    str(exe_parent / "Scripts"),
+                    str(PureWindowsPath(root) / "System32"),
+                    str(PureWindowsPath(root)),
+                ],
+            )
+            self.assertEqual(build_env["system_root"], root)
+        else:
+            # Не-Windows: PATH child-процесса не отличается от родительского.
+            self.assertEqual(
+                build_env["subprocess_path"], os.environ.get("PATH", "")
+            )
+            self.assertEqual(build_env["subprocess_path_entries"], [])
+            self.assertIsNone(build_env["system_root"])
 
         # Полный инвентарь: относительные POSIX-пути, размер и SHA-256.
         files = {entry["path"]: entry for entry in report["bundle"]["files"]}

@@ -13,6 +13,11 @@
    сверяются с пинами ``packaging/toolchain.json`` и
    ``packaging/requirements-build.lock`` до запуска PyInstaller;
 3. PyInstaller onedir-сборка по ``packaging/keklib-cli.spec`` в staging;
+   на Windows child-процесс получает ограниченный PATH (только каталог
+   интерпретатора, его ``Scripts``, ``System32`` и ``SystemRoot``) —
+   закреплённый PyInstaller ищет DLL по всем каталогам PATH процесса, и
+   посторонние записи hosted-окружения затягивают свои DLL в комплект
+   (см. ``pyinstaller_subprocess_env``);
 4. README.md/INSTALL.md/THIRD_PARTY_NOTICES.md и ``build-info.json`` с
    фактическими версиями runtime;
 5. самопроверка готового executable: ``--help`` и полная индексация
@@ -87,8 +92,8 @@ import sys
 import tarfile
 import tempfile
 import zipfile
-from collections.abc import Callable, Sequence
-from pathlib import Path
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path, PureWindowsPath
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PACKAGING_DIR = PROJECT_ROOT / "packaging"
@@ -1129,8 +1134,154 @@ def _run_selfcheck(exe: Path, sandbox: Path) -> None:
 # PyInstaller
 
 
+#: Разделитель PATH целевой ОС Windows-ветки (не хоста: ветка Windows-only,
+#: и её результат обязан быть корректен при вычислении на любой ОС).
+_WINDOWS_PATH_SEPARATOR = ";"
+
+
+def _windows_system_root(environ: Mapping[str, str]) -> str:
+    """SystemRoot из окружения: обязательное нативное Windows-имя, без догадок.
+
+    Поиск регистронезависимый (нативный ``os.environ`` на Windows
+    безрегистровый; словари тестов могут нести любой регистр). Значение
+    обязано быть абсолютным путём Windows (диск/UNC, не drive-relative) —
+    ``C:\\Windows`` никогда не подставляется предположением.
+    """
+    raw = None
+    for key, value in environ.items():
+        if key.upper() == "SYSTEMROOT":
+            raw = value
+            break
+    if raw is None or not str(raw).strip():
+        raise PackagingError(
+            "переменная окружения SystemRoot отсутствует или пуста: доверенные "
+            "каталоги System32/SystemRoot для PATH child-процесса PyInstaller "
+            "не выводятся из предположений (C:\\Windows не угадывается); "
+            "исправьте окружение сборки"
+        )
+    root = PureWindowsPath(str(raw))
+    if not root.is_absolute():
+        raise PackagingError(
+            f"SystemRoot {raw!r} не является абсолютным путём Windows "
+            "(drive-relative/относительное значение): доверенные каталоги "
+            "System32/SystemRoot не выводятся из предположений; исправьте "
+            "окружение сборки"
+        )
+    return str(root)
+
+
+def pyinstaller_subprocess_env(
+    *,
+    environ: Mapping[str, str] | None = None,
+    executable: str | None = None,
+    windows: bool | None = None,
+) -> dict[str, str] | None:
+    """Окружение child-процесса PyInstaller: Windows — ограниченный PATH.
+
+    Причина (закреплённый PyInstaller 6.22.3, ``depend/bindepend.py``):
+    на Windows разрешение DLL fallback-ом проходит по **всем** каталогам
+    ``PATH`` процесса (``resolve_library_path``: ``win_search_paths`` из
+    ``getenv('PATH')``), а ``building/build_main.py`` дополнительно
+    трактует унаследованный PATH как базу DLL-поиска при импорте
+    собираемых пакетов. Hosted PATH с посторонними каталогами (реальный
+    случай native-run-39260511786: ``Java_Temurin .../bin`` из hosted
+    toolcache) затягивает чужие ``ucrtbase.dll``/``api-ms-win-*`` в
+    COLLECT — с пруфаненсом в каждой ``toc_source`` записи.
+
+    Поэтому на Windows PATH child-процесса ограничен четырьмя доверенными
+    записями в точном порядке: каталог ``sys.executable``
+    (``pythonXY.dll``, ``vcruntime140*.dll``), его ``Scripts``,
+    ``SystemRoot\\System32`` и ``SystemRoot`` (UCRT: ``ucrtbase.dll`` и
+    ``api-ms-win-*`` — PyInstaller рассчитывает находить их именно через
+    системные записи PATH). Прочие потребности разрешения библиотек
+    pinned PyInstaller удовлетворяет сам, без PATH: каталог каждого
+    анализируемого бинаря — первая позиция поиска
+    (``_get_imports_pefile``), покрывающая и ``DLLs`` установленного
+    Python.
+
+    ``None`` (не-Windows): окружение родителя наследуется без изменений —
+    ``subprocess.run(env=None)``. Глобальный ``os.environ`` не меняется
+    ни на одной ОС; результат — свежая копия окружения с заменённым
+    только ``PATH``. ``windows=None`` означает реальную платформу
+    (``sys.platform == "win32"``); явное значение — для тестов ветки.
+    ``executable`` обязан быть абсолютным путём Windows: относительный
+    или drive-relative интерпретатор — отказ, а не молчаливый запуск.
+    """
+    if windows is None:
+        windows = sys.platform == "win32"
+    if not windows:
+        return None
+    source = dict(os.environ if environ is None else environ)
+    exe = sys.executable if executable is None else executable
+    exe_path = PureWindowsPath(exe)
+    if not exe_path.is_absolute():
+        raise PackagingError(
+            f"интерпретатор {exe!r} не является абсолютным путём Windows: "
+            "запуск PyInstaller с относительным/недоопределённым "
+            "интерпретатором не детерминирован и запрещён"
+        )
+    system_root = _windows_system_root(source)
+    entries = (
+        str(exe_path.parent),
+        str(exe_path.parent / "Scripts"),
+        str(PureWindowsPath(system_root) / "System32"),
+        system_root,
+    )
+    env = dict(source)
+    env["PATH"] = _WINDOWS_PATH_SEPARATOR.join(entries)
+    return env
+
+
+def pyinstaller_environment_facts(
+    *,
+    environ: Mapping[str, str] | None = None,
+    executable: str | None = None,
+    windows: bool | None = None,
+) -> dict[str, object]:
+    """Факты контроля окружения сборки для диагностического отчёта.
+
+    Переиспользуется ``tools/inventory_runtime.py``: отчёт фиксирует
+    фактический PATH child-процесса PyInstaller и PATH родителя, чтобы
+    нативный повтор доказал исключение посторонних каталогов (враждебный
+    ``PATH`` родителя остаётся в фактах как есть — рядом с ограниченным
+    ``PATH`` child-процесса).
+    """
+    source = os.environ if environ is None else environ
+    parent_path = source.get("PATH", "")
+    env = pyinstaller_subprocess_env(
+        environ=environ, executable=executable, windows=windows
+    )
+    exe = sys.executable if executable is None else executable
+    restricted = env is not None
+    system_root = _windows_system_root(env) if restricted else None
+    return {
+        "platform": sys.platform,
+        "policy": "windows-restricted-path" if restricted else "inherit-parent",
+        "python_executable": exe,
+        "parent_path": parent_path,
+        "subprocess_path": env["PATH"] if restricted else parent_path,
+        "subprocess_path_entries": (
+            env["PATH"].split(_WINDOWS_PATH_SEPARATOR) if restricted else []
+        ),
+        "system_root": system_root,
+    }
+
+
 def _run_pyinstaller(distpath: Path, workpath: Path) -> None:
-    """Нативная onedir-сборка по spec в staging-каталоги."""
+    """Нативная onedir-сборка по spec в staging-каталоги.
+
+    На Windows child-процесс получает ограниченный PATH (см.
+    ``pyinstaller_subprocess_env``): закреплённый PyInstaller ищет DLL по
+    всем каталогам PATH процесса, и посторонние записи hosted-окружения
+    затягивают свои DLL в комплект. Остальные ОС наследуют окружение
+    родителя без изменений (``env=None``). Интерпретатор запускается
+    только по абсолютному пути ``sys.executable``.
+    """
+    if not Path(sys.executable).is_absolute():
+        raise PackagingError(
+            f"sys.executable {sys.executable!r} не абсолютный: запуск "
+            "PyInstaller с относительным интерпретатором запрещён"
+        )
     command = [
         sys.executable,
         "-m",
@@ -1141,7 +1292,11 @@ def _run_pyinstaller(distpath: Path, workpath: Path) -> None:
         str(SPEC_FILE),
     ]
     result = subprocess.run(
-        command, cwd=str(PROJECT_ROOT), capture_output=True, text=True
+        command,
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        env=pyinstaller_subprocess_env(),
     )
     if result.returncode != 0:
         raise PackagingError(

@@ -1488,5 +1488,193 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
 
 
+#: Враждебный PATH реального прогона native-run-39260511786: Java_Temurin
+#: из hosted toolcache — источник api-ms-win-*/ucrtbase.dll, попавших в
+#: Windows COLLECT (toc_source каждой записи).
+JAVA_TEMURIN_BIN = (
+    r"C:\hostedtoolcache\windows\Java_Temurin-Hotspot_jdk\8.0.504-1\x64\bin"
+)
+
+
+def _hostile_windows_environ() -> dict[str, str]:
+    """Родительское окружение Windows с посторонними каталогами в PATH."""
+    return {
+        "SystemRoot": r"C:\Windows",
+        "PATH": ";".join(
+            [
+                JAVA_TEMURIN_BIN,
+                r"C:\Windows\system32",
+                r"C:\Windows",
+                r"C:\Program Files\dotnet",
+                r"C:\ProgramData\chocolatey\bin",
+            ]
+        ),
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD",
+        "TEMP": r"C:\Windows\TEMP",
+        "TMP": r"C:\Windows\TEMP",
+    }
+
+
+def _trusted_path_entries(executable: str, system_root: str) -> list[str]:
+    from pathlib import PureWindowsPath
+
+    exe_parent = PureWindowsPath(executable).parent
+    root = PureWindowsPath(system_root)
+    return [
+        str(exe_parent),
+        str(exe_parent / "Scripts"),
+        str(root / "System32"),
+        str(root),
+    ]
+
+
+class PyInstallerSubprocessEnvTests(unittest.TestCase):
+    """Окружение child-процесса PyInstaller: изоляция Windows от чужих DLL в PATH.
+
+    Закреплённый PyInstaller 6.22.3 на Windows ищет DLL фолбэком по ВСЕМ
+    каталогам PATH процесса (``bindepend.resolve_library_path``), а PATH
+    родителя hosted-runner'а содержит Java_Temurin с собственными
+    ucrtbase/api-ms-win-* — они попадали в COLLECT (native-run-39260511786).
+    Контракт: на Windows PATH child-процесса ограничен доверенными
+    каталогами (интерпретатор, его Scripts, System32, SystemRoot);
+    на остальных ОС окружение родителя не меняется вовсе.
+    """
+
+    EXE = r"C:\hostedtoolcache\windows\Python314\x64\python.exe"
+    ROOT = r"C:\Windows"
+
+    def test_non_windows_returns_none_parent_env_inherited(self) -> None:
+        self.assertIsNone(bp.pyinstaller_subprocess_env(windows=False))
+
+    def test_default_branch_follows_native_platform(self) -> None:
+        env = bp.pyinstaller_subprocess_env()
+        if sys.platform == "win32":
+            self.assertIsInstance(env, dict)
+        else:
+            self.assertIsNone(env)
+
+    def test_windows_path_restricted_to_trusted_directories_in_order(self) -> None:
+        env = bp.pyinstaller_subprocess_env(
+            environ=_hostile_windows_environ(), executable=self.EXE, windows=True
+        )
+        self.assertIsNotNone(env)
+        expected = _trusted_path_entries(self.EXE, self.ROOT)
+        # Разделитель целевой ОС, а не хоста: ветка Windows-only.
+        self.assertEqual(env["PATH"], ";".join(expected))
+        self.assertEqual(env["PATH"].split(";"), expected)
+
+    def test_windows_hostile_java_directory_excluded(self) -> None:
+        parent = _hostile_windows_environ()
+        env = bp.pyinstaller_subprocess_env(
+            environ=parent, executable=self.EXE, windows=True
+        )
+        entries = env["PATH"].split(";")
+        self.assertNotIn(JAVA_TEMURIN_BIN, entries)
+        self.assertNotIn("Java_Temurin", env["PATH"])
+        for foreign in (r"C:\Program Files\dotnet", r"C:\ProgramData\chocolatey\bin"):
+            self.assertNotIn(foreign, entries)
+        # Ровно четыре доверенные записи — посторонних каталогов нет.
+        self.assertEqual(len(entries), 4)
+
+    def test_windows_parent_environ_unchanged_and_result_is_copy(self) -> None:
+        parent = _hostile_windows_environ()
+        snapshot = dict(parent)
+        env = bp.pyinstaller_subprocess_env(
+            environ=parent, executable=self.EXE, windows=True
+        )
+        self.assertEqual(parent, snapshot)
+        self.assertIsNot(env, parent)
+        self.assertNotEqual(env["PATH"], snapshot["PATH"])
+
+    def test_windows_preserves_other_environment_variables(self) -> None:
+        parent = _hostile_windows_environ()
+        env = bp.pyinstaller_subprocess_env(
+            environ=parent, executable=self.EXE, windows=True
+        )
+        for key in ("SystemRoot", "PATHEXT", "TEMP", "TMP"):
+            self.assertEqual(env[key], parent[key])
+
+    def test_windows_requires_absolute_interpreter(self) -> None:
+        parent = _hostile_windows_environ()
+        for bad in ("python.exe", r"tools\python.exe", r"C:python\python.exe"):
+            with self.assertRaises(
+                bp.PackagingError, msg=f"ожидался отказ для {bad!r}"
+            ):
+                bp.pyinstaller_subprocess_env(
+                    environ=parent, executable=bad, windows=True
+                )
+
+    def test_windows_requires_absolute_system_root_without_guessing(self) -> None:
+        for bad in (
+            {},  # SystemRoot отсутствует — C:\Windows не угадывается
+            {"SystemRoot": ""},
+            {"SystemRoot": "Windows"},
+            {"SystemRoot": r"C:Windows"},  # drive-relative
+        ):
+            environ = dict(_hostile_windows_environ())
+            environ.pop("SystemRoot", None)
+            environ.update(bad)
+            with self.assertRaises(
+                bp.PackagingError, msg=f"ожидался отказ для SystemRoot={bad!r}"
+            ):
+                bp.pyinstaller_subprocess_env(
+                    environ=environ, executable=self.EXE, windows=True
+                )
+
+    def test_run_pyinstaller_passes_env_from_shared_helper(self) -> None:
+        """Проводка: env= приходит из общего helper'а как есть (обе ветки)."""
+        for sentinel in (None, {"PATH": "trusted"}):
+            with mock.patch.object(
+                bp, "pyinstaller_subprocess_env", return_value=sentinel
+            ) as helper, mock.patch("subprocess.run") as run:
+                run.return_value = subprocess.CompletedProcess([], 0, "", "")
+                bp._run_pyinstaller(self.tmp_path() / "dist", self.tmp_path() / "work")
+            helper.assert_called_once_with()
+            self.assertIs(run.call_args.kwargs["env"], sentinel)
+            command = run.call_args.args[0]
+            self.assertEqual(command[0], sys.executable)
+            self.assertTrue(Path(command[0]).is_absolute())
+
+    def test_run_pyinstaller_rejects_relative_interpreter(self) -> None:
+        with mock.patch.object(bp.sys, "executable", "python.exe"), mock.patch(
+            "subprocess.run"
+        ) as run:
+            with self.assertRaises(bp.PackagingError):
+                bp._run_pyinstaller(self.tmp_path() / "dist", self.tmp_path() / "work")
+        run.assert_not_called()
+
+    def test_environment_facts_record_build_path_control(self) -> None:
+        parent = _hostile_windows_environ()
+        facts = bp.pyinstaller_environment_facts(
+            environ=parent, executable=self.EXE, windows=True
+        )
+        self.assertEqual(facts["policy"], "windows-restricted-path")
+        self.assertEqual(facts["python_executable"], self.EXE)
+        self.assertEqual(facts["system_root"], self.ROOT)
+        self.assertEqual(facts["parent_path"], parent["PATH"])
+        self.assertEqual(
+            facts["subprocess_path_entries"],
+            _trusted_path_entries(self.EXE, self.ROOT),
+        )
+        self.assertIn(JAVA_TEMURIN_BIN, facts["parent_path"])
+        self.assertNotIn("Java_Temurin", facts["subprocess_path"])
+
+    def test_environment_facts_inherit_policy_on_non_windows(self) -> None:
+        parent = {"PATH": "/usr/bin:/bin", "HOME": "/home/user"}
+        facts = bp.pyinstaller_environment_facts(
+            environ=parent, executable="/usr/bin/python3", windows=False
+        )
+        self.assertEqual(facts["policy"], "inherit-parent")
+        self.assertEqual(facts["parent_path"], parent["PATH"])
+        self.assertEqual(facts["subprocess_path"], parent["PATH"])
+        self.assertEqual(facts["subprocess_path_entries"], [])
+        self.assertIsNone(facts["system_root"])
+
+    def tmp_path(self) -> Path:
+        tmp = Path(tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp")))
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+        return tmp
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

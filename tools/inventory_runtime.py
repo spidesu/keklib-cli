@@ -24,6 +24,13 @@ PyInstaller, фактические метаданные build-info, самоп�
 библиотек комплекта. Staging — собственный ``tempfile`` под ``build/`` и
 удаляется целиком; отчёт публикуется вне staging атомарно и без перезаписи
 существующего файла.
+
+Схема 2 дополняет отчёт фактом ``build_environment`` (общий helper
+``build_portable.pyinstaller_environment_facts``): фактический PATH
+child-процесса PyInstaller против PATH родителя — доказательство
+исключения посторонних каталогов (реальный случай Java_Temurin из hosted
+toolcache, чьи ucrtbase/api-ms-win-* попадали в Windows COLLECT) на
+нативном повторе.
 """
 
 from __future__ import annotations
@@ -60,7 +67,7 @@ from tools import build_portable as bp  # noqa: E402
 #: (native_build_verified) и сюда не входит.
 PENDING_TARGETS = frozenset({"windows-x86_64", "macos-x86_64", "macos-arm64"})
 
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
 
 _SOURCE_SHA_RE = re.compile(r"[0-9a-f]{40}")
 
@@ -567,6 +574,7 @@ def build_report(
     files: list[dict[str, object]],
     libraries: list[dict[str, object]],
     licenses: list[dict[str, object]],
+    build_environment: dict[str, object],
 ) -> dict[str, object]:
     spec = bp.load_targets()[target]  # type: ignore[index]
     from keklib_cli import __version__
@@ -591,6 +599,7 @@ def build_report(
         "target_spec": dict(spec),
         "host": host_facts(),
         "runtime": runtime_facts(),
+        "build_environment": build_environment,
         "preflight": preflight_facts(target),
         "build_info": info,
         "selfcheck": {"passed": True},
@@ -671,6 +680,10 @@ def inventory_runtime(
     try:
         dist = staging / "dist"
         work = staging / "work"
+        # Факты контроля окружения собираются ДО прогона тем же общим
+        # helper'ом, которым пользуется _run_pyinstaller: в отчёте —
+        # фактический PATH child-процесса и PATH родителя.
+        build_environment = bp.pyinstaller_environment_facts()
         print(f"[inventory] диагностический onedir: {target}", file=sys.stderr)
         bp._run_pyinstaller(dist, work)
         bundle = dist / bp.BUNDLE_ROOT
@@ -715,6 +728,7 @@ def inventory_runtime(
             files=files,
             libraries=libraries,
             licenses=licenses,
+            build_environment=build_environment,
         )
         print(f"[inventory] публикация отчёта в {output}", file=sys.stderr)
         return write_report(report, Path(output), target=target)
