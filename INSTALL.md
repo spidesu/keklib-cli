@@ -6,16 +6,20 @@ standalone: архив с исполняемым файлом и всеми ег
 
 ## Доступность
 
-Публичного готового portable-релиза пока нет: архивы не выложены в
-интернете и не подписаны сертификатом. Сборки, прошедшие нативную
-приёмку на своих сборочных ОС, существуют для всех четырёх target
-(Linux x86-64 — Ubuntu 22.04; Windows x64 — Windows Server 2022;
-macOS Intel — macOS 15; macOS Apple Silicon — macOS 14) и передаются
-владельцем проекта напрямую; полный выпускной гейт четырёхплатформенной
-матрицы и публикация Release — отдельный незавершённый шаг, черновики
-Release публичной поставкой не являются.
+Публичного готового portable-релиза пока нет: текущая публичная
+поставка — предварительный выпуск (prerelease) v0.1.0 —
+https://github.com/spidesu/keklib-cli/releases/tag/v0.1.0 (prerelease не
+появляется на странице `releases/latest`, используйте прямую ссылку).
+На странице релиза для каждой платформы выложен portable-архив, рядом с
+ним его sidecar `<archive>.sha256` и общий `SHA256SUMS` всех четырёх
+архивов. Установка Python не требуется: runtime входит в архив.
 Версию и параметры конкретного архива (version, target, python, sqlite,
 rules_version, minimum_os) см. в его `build-info.json`.
+
+Автоматические архивы «Source code (zip/tar.gz)» на странице релиза —
+исходный код репозитория, а не portable-поставка: для запуска программы
+скачивайте только файлы вида `keklib-cli-<version>-<target>.<ext>` и их
+`.sha256`; форма запуска из исходников — в конце этого файла.
 
 Конфигурация и кэш portable-версии хранятся в нативных пользовательских
 каталогах ОС, а не рядом с программой; состояние библиотеки (исходные
@@ -42,6 +46,14 @@ INPX/ZIP) только читается.
 - macOS Intel: `keklib-cli-<version>-macos-x86_64.tar.gz`;
 - macOS Apple Silicon: `keklib-cli-<version>-macos-arm64.tar.gz`.
 
+Прямые ссылки выпуска v0.1.0 (sidecar-сумма каждого архива лежит рядом
+на той же странице; `SHA256SUMS` — общий файл сумм всех четырёх архивов):
+
+- Linux x64: [keklib-cli-0.1.0-linux-x86_64.tar.gz](https://github.com/spidesu/keklib-cli/releases/download/v0.1.0/keklib-cli-0.1.0-linux-x86_64.tar.gz)
+- Windows x64: [keklib-cli-0.1.0-windows-x86_64.zip](https://github.com/spidesu/keklib-cli/releases/download/v0.1.0/keklib-cli-0.1.0-windows-x86_64.zip)
+- macOS Intel: [keklib-cli-0.1.0-macos-x86_64.tar.gz](https://github.com/spidesu/keklib-cli/releases/download/v0.1.0/keklib-cli-0.1.0-macos-x86_64.tar.gz)
+- macOS Apple Silicon: [keklib-cli-0.1.0-macos-arm64.tar.gz](https://github.com/spidesu/keklib-cli/releases/download/v0.1.0/keklib-cli-0.1.0-macos-arm64.tar.gz)
+
 В командах этой документации угловые заполнители вида `<version>`
 (и `<путь-к-библиотеке>` и т.п.) заменяйте фактическими значениями
 **до** выполнения: без подстановки shell трактует `<` и `>` как
@@ -59,7 +71,9 @@ INPX/ZIP) только читается.
 **не заменяет доверенную цифровую подпись** и не доказывает авторство:
 сумму надо сверять с источником, которому вы доверяете (страница релиза
 проекта или передача из первых рук) — приложенный файл `.sha256` и есть
-источник суммы. Подписи сертификатом нет.
+источник суммы. Подписи сертификатом нет. Общий файл `SHA256SUMS` на
+странице релиза содержит суммы всех четырёх архивов и пригоден для
+перекрёстной сверки любой строки.
 
 Linux:
 

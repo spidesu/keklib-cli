@@ -29,26 +29,42 @@
 ## Структура и текущий этап
 
 **Текущий статус (приоритетный блок; историческая хроника ниже может
-отставать — при расхождении верен этот блок).** Все четыре target
-прошли per-target нативную приёмку: linux-x86_64 — 2026-10-18
-(rootless-билдер Ubuntu 22.04.5), windows-x86_64/macos-x86_64/
-macos-arm64 — 2026-10-19 (нативные сборки полным конвейером +
-обязательные изолированные smoke на свежих машинах CI, run 39276125022,
-source SHA 7b8fe2908cefff02e8b1b874c50e13c130a195cd, подготовительный
-scope `windows-macos` без выпускного гейта); `packaging/toolchain.json`
-отражает это (`native_build_verified=true`, `verified_on`), SQLite-пины
-3.50.4 измерены инвентаризацией (run 39271538974: macOS libmpdec 4.0.1 /
-liblzma 5.2.3 на обеих CPU). Per-target приёмка ≠ полный выпускной гейт
-матрицы четырёх target — он не выполнялся. Публичного релиза нет;
-DRAFT Release 417278029 (v0.1.0, tag не создан) с двумя linux-архивами
-из db563c5 остаётся черновиком и публичной поставкой не является;
-подписи/notarization нет. Финальная волна (fix FAT64-инвентаря +
-completion-документы) меняет встроенные в архивы документы (README/
-INSTALL/THIRD_PARTY_NOTICES), поэтому три native-комплекта обязательны
-к пересборке и свежему smoke на новых байтах ПОСЛЕ review этой волны:
-существующие архивы/отчёты run 39276125022 к новым байтам не
-привязываются и переиспользование их отчётов запрещено. Детали волны —
-`.superpowers/sdd/2026-02-11-keklib-cli-portable/native-final-fix-report.md`.
+отставать — при расхождении верен этот блок).** Полный выпускной гейт
+пройден: run 39315094052 (`portable.yml`, scope `all`) на commit
+`ad5c357a2b3c88642321bfd422361bfc7ca25a7d` — source6 → build4 → fresh
+smoke4 → gate, все jobs SUCCESS, созданы `SHA256SUMS` и
+`verified-portable`; скачанный набор проверен побайтово, независимый
+запуск `tools/release_gate.py` на новых копиях — exit 0. Этому
+предшествовали per-target нативные приёмки всех четырёх target и волна
+native-final-fix (пересборка трёх native-комплектов на новых байтах
+документов; детали —
+`.superpowers/sdd/2026-02-11-keklib-cli-portable/native-final-fix-report.md`).
+Публичный prerelease **v0.1.0** опубликован с явного разрешения
+пользователя: https://github.com/spidesu/keklib-cli/releases/tag/v0.1.0
+(Release id 417278029, draft=false, prerelease=true, тег указывает на
+`ad5c357a2b3c88642321bfd422361bfc7ca25a7d`). Активы — 4 архива + 4
+sidecar `.sha256` + `SHA256SUMS`, все собраны именно из ревизии тега:
+linux-x86_64 27 569 680 байт
+`e46118f7aacd39a3daa6a062239b22bd84b47d6ff64f7f8f713fd8a4e06648aa`,
+windows-x86_64
+`fc94cf4061fc067ec64f858f7337f0d8acbe1b984f6c56879b41212df4d9bab8`,
+macos-x86_64
+`dca4ea3953e327c2bb233908a41e83b08770a02c5b950f7a198051ac47457ee0`,
+macos-arm64
+`9a32829d0a34182f796c5a3049e2be8bc6e6e531eef6836aa8568cf1a3a954dd`.
+Корневые README/INSTALL/BUILD приведены к публичной поставке отдельным
+docs-коммитом ПОСЛЕ тега на ветке feat/native-platform-artifacts —
+коммит документации НЕ является источником артефактов (источник —
+ревизия тега `ad5c357a2b3c88642321bfd422361bfc7ca25a7d`). Ограничения
+остаются: подписи сертификатом и notarization нет, SmartScreen/
+Gatekeeper не проверялись; заявленные минимумы — только сборочные ОС
+(Ubuntu 22.04/glibc 2.35; Windows Server 2022 — клиентские Windows не
+проверялись и не заявляются; macOS 15 Intel / macOS 14 ARM64 — более
+старые не заявляются); prerelease — поведение может меняться без
+обратной совместимости. Отчёты:
+`.superpowers/sdd/2026-02-11-keklib-cli-portable/full-gate-ad5c357-report.md`
+и `release-v0.1.0-publish/` (release-notes, payload, JSON
+опубликованного Release, manifest активов, preflight-review).
 
 Реализованы контракты данных, основа CLI, нативные платформенные
 операции, потоковый импорт INPX с объединением серий (включая завершающий
