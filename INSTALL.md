@@ -36,6 +36,11 @@ INPX/ZIP) только читается.
 - macOS Intel: `keklib-cli-<version>-macos-x86_64.tar.gz`;
 - macOS Apple Silicon: `keklib-cli-<version>-macos-arm64.tar.gz`.
 
+В командах этой документации угловые заполнители вида `<version>`
+(и `<путь-к-библиотеке>` и т.п.) заменяйте фактическими значениями
+**до** выполнения: без подстановки shell трактует `<` и `>` как
+перенаправления потоков.
+
 Поле `minimum_os` в `build-info.json` — это **заявленный baseline
 сборочной машины**, а не доказанный минимальный клиентский выпуск ОС:
 более старые или иные выпуски не обещаются без отдельной нативной
@@ -69,6 +74,7 @@ Get-FileHash .\keklib-cli-<version>-windows-x86_64.zip -Algorithm SHA256
 устанавливать не нужно.
 
 ```bash
+mkdir -p ~/Apps
 tar -xzf keklib-cli-<version>-linux-x86_64.tar.gz -C ~/Apps
 ~/Apps/keklib-cli/keklib-cli --help
 ```

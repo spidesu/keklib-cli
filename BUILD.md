@@ -105,7 +105,10 @@ python -m venv .venv
 ```
 
 ```bash
-# НЕ ПРОВЕРЕНО: выполняется на нативной macOS целевой архитектуры
+# НЕ ПРОВЕРЕНО: выполняется на нативной macOS; target выбирается строго
+# по архитектуре машины: Intel → macos-x86_64, Apple Silicon → macos-arm64
+# (runner'ы — в таблице выше; нативность-гейт запрещает сборку не на своей
+# архитектуре/ОС)
 python3 -m venv .venv
 .venv/bin/python -m pip install -e .
 .venv/bin/python -m pip install -r packaging/requirements-build.lock
@@ -235,9 +238,33 @@ inode неотличима), а удаление чужой записи нед�
   отсутствие нативного подтверждения минимума блокируется гейтом, а не
   подменяется успехом прогона.
 
+  Smoke сам строго проверяет собственную изоляцию: `find_spec(
+  "keklib_cli")` в процессе harness обязан вернуть None (`source_checkout_absent`),
+  поэтому его **нельзя** запускать окружением с установленным приложением —
+  в частности, обычным dev-`.venv` с editable-установкой smoke честно
+  откажет именно по этому наблюдению. Угловые заполнители в командах
+  (`<архив>`, `<новый-каталог>`) замените фактическими значениями до
+  выполнения; `--workdir` обязан ещё не существовать (существующий
+  каталог отвергается без записи в него).
+
+  Linux/POSIX — из checkout тем же интерпретатором venv, но с полной
+  изоляцией импортов: `-I` игнорирует `PYTHONPATH`/переменные окружения
+  и не добавляет каталог скрипта, `-S` отключает site-packages
+  (editable-установка приложения недоступна); скрипт сам добавляет в
+  `sys.path` только корень harness для импорта `tests.harness`:
+
   ```bash
-  .venv/bin/python tools/smoke_portable.py --archive <архив> --workdir <новый-каталог>
+  .venv/bin/python -I -S tools/smoke_portable.py \
+      --archive ./build/portable-out/keklib-cli-<version>-linux-x86_64.tar.gz \
+      --workdir ./build/smoke-workdir
   ```
+
+  Пример с `-I -S` — только Linux/POSIX. На Windows harness требует
+  test-only `pywinpty` (ConPTY) из `packaging/requirements-test-windows.lock`:
+  создайте для smoke отдельный harness-venv, установите в него только
+  этот lock и **не** устанавливайте туда keklib-cli — изоляция
+  (`find_spec("keklib_cli") is None`) проверяется самим инструментом
+  так же строго.
 
 - `tools/release_gate.py` — выпускной гейт: ровно один успешный отчёт
   smoke на target (единая версия, host ОС/CPU == target, пересчитанное
