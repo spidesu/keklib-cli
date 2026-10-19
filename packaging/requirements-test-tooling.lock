@@ -1,0 +1,16 @@
+# Test-tooling зависимости source CI (исправительная волна CI, 2026-10-19).
+#
+# Назначение: минимальный набор пакетов, который нужен ТЕСТАМ сборочного
+# tooling на CI, но не нужен runtime CLI: tests/test_packaging.py вызывает
+# tools/build_portable.py:lock_pins, а тот разбирает requirements-build.lock
+# через packaging.requirements. Runtime-зависимостью приложения пакет
+# НЕ является: pyproject.toml остаётся без runtime-зависимостей, portable
+# runtime этого пакета не содержит.
+#
+# Пин — подмножество packaging/requirements-build.lock (та же версия и тот
+# же набор SHA-256); расхождение двух файлов блокируется тестом
+# test_tooling_lock_subset_of_build_lock. Установка:
+#   python -m pip install -r packaging/requirements-test-tooling.lock
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c \
+    --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79

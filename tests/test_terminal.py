@@ -85,15 +85,19 @@ class DisplayTests(unittest.TestCase):
                 self.assertEqual(display_text(value), expected)
 
     def test_write_line_narrow_encoding(self):
+        # newline="\n": перевод строки write_line обязан дойти до потока
+        # как "\n" без подмены — собственная трансляция os.linesep у
+        # тестового wrapper'а (по умолчанию на Windows \r\n) проверяла бы
+        # обёртку, а не CLI.
         raw = io.BytesIO()
-        stream = io.TextIOWrapper(raw, encoding="cp1251")
+        stream = io.TextIOWrapper(raw, encoding="cp1251", newline="\n")
         write_line(stream, "Мастер \U0001f4d6 и Маргарита")
         stream.flush()
         text = raw.getvalue().decode("cp1251")
         self.assertIn("Мастер", text)
         self.assertIn("?", text)  # непредставимый символ заменён, а не traceback
         ascii_raw = io.BytesIO()
-        ascii_stream = io.TextIOWrapper(ascii_raw, encoding="ascii")
+        ascii_stream = io.TextIOWrapper(ascii_raw, encoding="ascii", newline="\n")
         write_line(ascii_stream, "Ошибка: книга не найдена")
         ascii_stream.flush()
         self.assertEqual(

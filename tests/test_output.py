@@ -238,7 +238,10 @@ class OutputTests(unittest.TestCase):
         with self.assertRaises(TargetExistsError):
             extract_book(self.library, _book(), destination)
         self.assertTrue(target.is_symlink())
-        self.assertEqual(os.readlink(target), str(elsewhere))
+        # Каноническая идентичность цели ссылки: на Windows os.readlink
+        # возвращает extended-путь с префиксом \\?\ — строковое равенство
+        # с исходным путём там не обязано выполняться.
+        self.assertEqual(os.path.realpath(target), os.path.realpath(elsewhere))
         self.assertEqual(elsewhere.read_bytes(), b"OLD")
         self.assertEqual(list(destination.iterdir()), [target])
 

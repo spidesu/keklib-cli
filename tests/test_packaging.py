@@ -350,11 +350,12 @@ class PackagingTests(unittest.TestCase):
             rel_dir = Path(dirpath).relative_to(clean)
             dirnames.sort()
             for d in dirnames:
-                expected.add(
-                    "keklib-cli" + ("/" + str(rel_dir / d) if str(rel_dir) != "." else "/" + d)
-                )
+                # Имена записей архива — POSIX-пути на любой ОС (как пишет
+                # упаковщик); native разделители Windows не меняют ожиданий.
+                child = (rel_dir / d).as_posix() if str(rel_dir) != "." else d
+                expected.add(f"keklib-cli/{child}")
             for f in sorted(filenames):
-                rel = str(rel_dir / f) if str(rel_dir) != "." else f
+                rel = (rel_dir / f).as_posix() if str(rel_dir) != "." else f
                 expected.add("keklib-cli/" + rel)
         self.assertEqual(names, expected)
 
@@ -486,6 +487,54 @@ class PackagingTests(unittest.TestCase):
             )
 
     # 9. onedir и console: не onefile и не GUI.
+
+    def test_tooling_lock_subset_of_build_lock(self) -> None:
+        """Test-tooling lock — точное подмножество requirements-build.lock.
+
+        Второй lock-файл нужен source CI (тестам сборочного tooling нужен
+        ``packaging``, но не весь build-lock с PyInstaller); чтобы пины не
+        разошлись, каждая его запись обязана совпадать с requirements-build.lock
+        до хеша: та же версия и тот же набор строк ``--hash``.
+        """
+        build_text = (
+            PROJECT_ROOT / "packaging" / "requirements-build.lock"
+        ).read_text(encoding="utf-8")
+        tooling_text = (
+            PROJECT_ROOT / "packaging" / "requirements-test-tooling.lock"
+        ).read_text(encoding="utf-8")
+
+        def entries(text: str) -> dict[str, tuple[str, frozenset[str]]]:
+            logical = ""
+            parsed: dict[str, tuple[str, frozenset[str]]] = {}
+            for raw in text.splitlines():
+                line = raw.rstrip()
+                if line.endswith("\\"):
+                    logical += line[:-1] + " "
+                    continue
+                logical += line
+                entry = logical.strip()
+                logical = ""
+                if not entry or entry.startswith("#"):
+                    continue
+                hashes = frozenset(
+                    part.strip() for part in entry.split("--hash")[1:]
+                )
+                requirement = entry.split("--hash")[0].strip().rstrip("\\").strip()
+                name, _, version = requirement.partition("==")
+                parsed[name] = (version, hashes)
+            return parsed
+
+        build = entries(build_text)
+        tooling = entries(tooling_text)
+        self.assertTrue(tooling, "test-tooling lock пуст")
+        self.assertIn("packaging", tooling, "тестам tooling нужен packaging.requirements")
+        for name, (version, hashes) in tooling.items():
+            self.assertIn(name, build, f"{name} нет в requirements-build.lock")
+            self.assertEqual(
+                (version, hashes),
+                build[name],
+                f"{name}: test-tooling lock разошёлся с requirements-build.lock",
+            )
 
     def test_no_onefile(self) -> None:
         spec = (PROJECT_ROOT / "packaging" / "keklib-cli.spec").read_text(encoding="utf-8")
@@ -669,6 +718,48 @@ class PackagingTests(unittest.TestCase):
             member = tf.getmember("keklib-cli/_internal/libreal.so")
             self.assertTrue(member.issym())
             self.assertEqual(member.linkname, "libreal.so.1")
+
+    def test_bundle_symlink_tar_through_alias_ancestor(self) -> None:
+        """Цель tar-ссылки считается в одной канонической системе координат.
+
+        Путь комплекта через symlink-предка (macOS: ``/var`` →
+        ``/private/var``; Windows: short/long форма) прежде смешивал
+        resolved-цель с lexical-родителем: ``relpath`` выдавал хвост из
+        ``..`` и абсолютных сегментов вместо имени цели внутри комплекта
+        (первый CI, оба macOS). Здесь тот же предок-alias воспроизведён
+        настоящим symlink на POSIX, и roundtrip-распаковка обязана дать
+        рабочую относительную ссылку.
+        """
+        real_root = self.tmp / "real-root"
+        real_root.mkdir()
+        alias = self.tmp / "alias-root"
+        os.symlink(real_root, alias, target_is_directory=True)
+        bundle = _make_bundle_dir(real_root / "place")
+        internal = bundle / "_internal"
+        (internal / "libreal.so.1").write_bytes(b"internal-runtime")
+        os.symlink("libreal.so.1", internal / "libreal.so")
+        # Обращение к комплекту и выходу — только через alias-предка.
+        aliased_bundle = alias / "place" / "bundle"
+        archive = bp.archive_bundle(
+            aliased_bundle, alias / "out", version="0.0.0-test", target="linux-x86_64"
+        )
+        with tarfile.open(archive, "r:gz") as tf:
+            member = tf.getmember("keklib-cli/_internal/libreal.so")
+            self.assertTrue(member.issym())
+            linkname = member.linkname
+        self.assertEqual(linkname, "libreal.so.1")
+        self.assertNotIn("..", linkname)
+        self.assertNotIn("\\", linkname, "цель ссылки хранится POSIX-формой")
+        # Roundtrip: сохранённое имя цели, помещённое в каталог ссылки,
+        # обязано разрешаться в файл внутри комплекта.
+        restored_dir = self.tmp / "restored-internal"
+        restored_dir.mkdir()
+        (restored_dir / "libreal.so.1").write_bytes(b"internal-runtime")
+        restored = restored_dir / "libreal.so"
+        os.symlink(linkname, restored)
+        self.assertEqual(
+            restored.resolve(strict=True), (restored_dir / "libreal.so.1").resolve()
+        )
 
     def test_bundle_internal_symlink_zip_materializes(self) -> None:
         bundle = _make_bundle_dir(self.tmp, target="windows-x86_64")

@@ -403,7 +403,21 @@ class IndexStoreTests(unittest.TestCase):
         ):
             with self.assertRaises(IndexBuildError) as ctx:
                 write_index(self.path, [_book()], _meta(ImportStats(rows=1, books=1)))
-        self.assertIn("checksum mismatch", str(ctx.exception))
+        # Предметный контракт: расхождение FTS-индекса с content-table ловится
+        # именно пишущей проверкой целостности, а не молчаливым успехом.
+        # SQLite формулирует этот отказ по-разному в разных версиях (3.54 —
+        # «fts5: checksum mismatch for table …», старые сборки CI — «database
+        # disk image is malformed»); допустима только одна из реальных
+        # диагностик целостности SQLite, произвольная ошибка тест не пропустит.
+        message = str(ctx.exception)
+        self.assertTrue(
+            message.startswith(f"failed to build index {self.path}: ")
+            and (
+                "checksum mismatch" in message
+                or "database disk image is malformed" in message
+            ),
+            f"неожиданная диагностика integrity: {message!r}",
+        )
         self.assertEqual(list(self.base.iterdir()), [])
 
     def test_generator_error_cleans_up(self):

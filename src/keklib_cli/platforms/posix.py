@@ -84,7 +84,10 @@ def peak_rss_kib() -> int | None:
 _RENAME_NOREPLACE = 1
 
 #: Флаг renamex_np (Darwin): отказ вместо перезаписи существующего имени.
-_RENAME_EXCL = 0x00000040
+#: Официальный XNU bsd/sys/stdio.h: RENAME_SECLUDE=0x1, RENAME_SWAP=0x2,
+#: RENAME_EXCL=0x00000004. Прежнее значение 0x40 не было флагом renamex_np
+#: и на нативном macOS возвращало EINVAL из каждого fallback-вызова.
+_RENAME_EXCL = 0x00000004
 
 #: Относительные пути передаются syscall относительно cwd текущего потока.
 _AT_FDCWD = -100

@@ -639,6 +639,85 @@ class SearchTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+class CanonicalNoncharacterTests(unittest.TestCase):
+    """Канонизация U+FFFE/U+FFFF и полного surrogate-диапазона (волна CI).
+
+    Живой токенизатор ``unicode61`` менял статус U+FFFE/U+FFFF между
+    версиями SQLite: 3.45.1 (сборки CI) завершает ими слово, 3.54.0 —
+    оставляет внутри токена. Поэтому эти кодовые точки (и весь диапазон
+    суррогатов 0xD800..0xDFFF, непредставимый в строгом UTF-8 каталога)
+    вырезаются ``normalize`` симметрично при индексировании и поиске:
+    FTS их вообще не видит, лексика запроса и индекса совпадает на любом
+    runtime. Таблица разделителей при этом держит их как разделители
+    (защита от появления в обход ``normalize``).
+    """
+
+    def test_normalize_strips_exactly_canonical_set(self) -> None:
+        canonical = set(range(0xD800, 0xE000)) | {0xFFFE, 0xFFFF}
+        kept = (
+            "мастер и маргарита",
+            "a\uFFFDb",  # REPLACEMENT CHARACTER — обычный символ, не noncharacter-пара
+            "ё́жик",
+            "AB \u2060 Cf",  # форматные символы НЕ входят в канонический набор
+        )
+        for sample in kept:
+            with self.subTest(sample=repr(sample)):
+                stripped = [ord(c) for c in normalize(sample) if ord(c) in canonical]
+                self.assertEqual(stripped, [], f"канонизация съела лишнее: {sample!r}")
+        removed = (
+            "a\uFFFEb\uFFFFc мастер",
+            "\U0001F4D6 книги\uFFFF",
+            "кни\uFFFEги",
+        )
+        for sample in removed:
+            with self.subTest(sample=repr(sample)):
+                self.assertNotIn("\ufffe", normalize(sample))
+                self.assertNotIn("\uffff", normalize(sample))
+        # Отдельные суррогаты (могут появиться только из строк Python,
+        # строгий UTF-8 каталог их не даёт) вырезаются до SQLite — биндинг
+        # больше не падает на «surrogates not allowed».
+        self.assertEqual(normalize("ма" + chr(0xD800) + "стер"), "мастер")
+
+    def test_canonical_codepoints_stay_declared_separators(self) -> None:
+        for code in (0xFFFE, 0xFFFF, 0xD800, 0xDABC, 0xDFFF):
+            self.assertIn(
+                chr(code), text_module._FTS_SEPARATORS, hex(code)
+            )
+
+    def test_fts_never_sees_canonical_codepoints(self) -> None:
+        """Индекс и запрос согласованы на любом SQLite: спорные точки вырезаны.
+
+        Зонд повторяет сценарий расхождения: «a<CP>b» с кодовой точкой,
+        чей статус разделителя зависит от версии SQLite. После
+        канонизации FTS получает уже «ab», и фактические токены равны
+        ``query_tokens`` независимо от поведения живого токенизатора.
+        """
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        connection.execute(
+            "CREATE VIRTUAL TABLE probe USING fts5(x,"
+            " tokenize='unicode61 remove_diacritics 0')"
+        )
+        connection.execute(
+            "CREATE VIRTUAL TABLE vocab USING fts5vocab('probe', 'row')"
+        )
+        for sample in (
+            "a\uFFFEb мастер",
+            "a\uFFFFb мастер",
+            "маст\uFFFEер и\uFFFE маргарита",
+            "a\uFFFDb",  # REPLACEMENT CHARACTER не канонизируется
+        ):
+            with self.subTest(sample=repr(sample)):
+                normalized = normalize(sample)
+                connection.execute("DELETE FROM probe")
+                connection.execute("INSERT INTO probe VALUES (?)", (normalized,))
+                fts_terms = {
+                    row[0]
+                    for row in connection.execute("SELECT term FROM vocab")
+                }
+                self.assertEqual(set(query_tokens(sample)), fts_terms)
+
+
 class TokenizerAlignmentTests(unittest.TestCase):
     """Таблицы ``text`` обязаны совпадать с фактическим unicode61 SQLite.
 
@@ -683,23 +762,32 @@ class TokenizerAlignmentTests(unittest.TestCase):
         return {row[0] for row in self.connection.execute("SELECT term FROM vocab")}
 
     def test_separator_table_matches_live_tokenizer(self) -> None:
+        # Канонизированные кодовые точки (U+FFFE/U+FFFF и суррогаты)
+        # исключены из сверки: их статус в живом токенизаторе менялся
+        # между версиями SQLite (3.45 — разделители, 3.54 — символы
+        # токена), поэтому контракт держит их не сверкой с живым SQLite,
+        # а симметричным вырезанием в normalize (см. CanonicalNoncharacterTests)
+        # и объявлением разделителями в самой таблице.
+        canonical = set(range(0xD800, 0xE000)) | {0xFFFE, 0xFFFF}
+        probed = [cp for cp in self.codepoints if cp not in canonical]
         terms = self._terms(lambda cp: f"a{chr(cp)}b")
         live = {
             cp
-            for cp in self.codepoints
+            for cp in probed
             if not chr(cp).isalnum() and f"a{chr(cp)}b" not in terms
         }
         stored = {
             cp
-            for cp in self.codepoints
+            for cp in probed
             if chr(cp) in text_module._FTS_SEPARATORS
         }
-        # 0x20 и суррогаты непроверяемы этим зондом (исключены из полного
-        # перебора), но входят в таблицу как разделители по построению.
+        # 0x20 непроверяем этим зондом (исключён из полного перебора), но
+        # входит в таблицу как разделитель по построению; суррогаты
+        # непредставимы в UTF-8 SQLite и тоже сверяются только контрактом.
         self.assertEqual(live, stored, "таблица разделителей разошлась")
         self.assertIn(" ", text_module._FTS_SEPARATORS)
-        self.assertIn(chr(0xD800), text_module._FTS_SEPARATORS)
-        self.assertIn(chr(0xDFFF), text_module._FTS_SEPARATORS)
+        for code in (0xD800, 0xDFFF, 0xFFFE, 0xFFFF):
+            self.assertIn(chr(code), text_module._FTS_SEPARATORS)
 
     def test_continue_only_marks_match_live_tokenizer(self) -> None:
         continuation = self._terms(lambda cp: f"a{chr(cp)}b")
@@ -732,6 +820,10 @@ class TokenizerAlignmentTests(unittest.TestCase):
             "á́́b",
             "חַיֶּבֶת",
             " señor  maté ",
+            # Канонизированные noncharacters: в FTS не попадают вообще,
+            # лексика запроса совпадает с индексом на любой версии SQLite.
+            "a\uFFFEb мастер",
+            "кни\uFFFFги маст\uFFFEера",
         )
         for sample in samples:
             with self.subTest(sample=sample):

@@ -167,6 +167,13 @@ class IntegrationTests(unittest.TestCase):
             argv,
             capture_output=True,
             text=True,
+            # Дочерний Python запускается с PYTHONIOENCODING=utf-8 (см.
+            # _child_env), его вывод — UTF-8 на любой ОС. Без явной
+            # кодировки subprocess на Windows декодирует cp1252 и падает
+            # UnicodeDecodeError в reader-потоке: stdout/stderr становятся
+            # None и все проверки отчёта ломаются вторичными TypeError
+            # (первый CI, все Windows-jobs).
+            encoding="utf-8",
             timeout=timeout,
             env=self.env,
             cwd=self.base,
@@ -192,8 +199,18 @@ class IntegrationTests(unittest.TestCase):
         extracted = sorted(out1.glob("*.fb2"))
         self.assertEqual(len(extracted), 1)
         self.assertEqual(extracted[0].read_bytes(), KNOWN_PAYLOAD)
-        # Итоговый абсолютный путь — отдельной строкой transcript.
-        self.assertIn(str(extracted[0].resolve()), search.stdout.splitlines())
+        # Итоговый абсолютный путь — отдельной строкой transcript. Сравнение —
+        # по канонической идентичности (realpath обеих сторон): на macOS TMPDIR
+        # идёт через symlink-предок /var → /private/var, на Windows — short
+        # имя RUNNER~1 против длинного runneradmin; строковое равенство
+        # печатаемого и resolve()-пути на этих ОСах не обязано выполняться.
+        lines = [line for line in search.stdout.splitlines() if line.strip()]
+        printed = lines[-1]
+        self.assertEqual(
+            os.path.realpath(printed),
+            os.path.realpath(extracted[0]),
+            f"итоговая строка transcript: {printed!r}",
+        )
 
         # До обновления каталога новой книги нет — честный «не найдено».
         absent = self._cli(["search", "новая"], [])

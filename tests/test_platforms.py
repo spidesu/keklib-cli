@@ -790,7 +790,10 @@ class PublishTests(unittest.TestCase):
         with self.assertRaises(TargetExistsError):
             publish_no_replace(temp, target)
         self.assertTrue(target.is_symlink())
-        self.assertEqual(os.readlink(target), str(elsewhere))
+        # Каноническая идентичность: на Windows os.readlink отдаёт
+        # extended-путь \\?\C:\..., строковое равенство там не обязано
+        # выполняться.
+        self.assertEqual(os.path.realpath(target), os.path.realpath(elsewhere))
         self.assertEqual(elsewhere.read_bytes(), b"DATA")
 
         dangling = self.dir / "dangling.fb2"
@@ -851,6 +854,50 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(temp.read_bytes(), b"NEW")
         if sys.platform != "win32":
             self.assertEqual(calls, [syscall_name], "выбранная syscall не вызвана")
+
+    def test_darwin_rename_excl_flag_matches_xnu(self) -> None:
+        """Флаг renamex_np — официальный RENAME_EXCL XNU, а не 0x40.
+
+        XNU ``bsd/sys/stdio.h`` задаёт ``RENAME_EXCL 0x00000004``;
+        прежнее значение 0x40 не является ни одним флагом renamex_np, и
+        нативный macOS получал EINVAL из каждого fallback-вызова (первый
+        CI, macOS 3.11/3.14). Регрессия проверяет третий аргумент,
+        реально дошедший до libc-функции через настоящий код
+        ``_renamex_np`` (подменён только ``ctypes.CDLL``), — а не только
+        экспорт константы. Диспетчеризация Darwin подменяется
+        ``sys.platform``; сам syscall на macOS проверяет
+        ``test_darwin_native_publish``.
+        """
+        from keklib_cli.platforms import posix as posix_module
+
+        self.assertEqual(posix_module._RENAME_EXCL, 0x00000004)
+        captured: list[tuple[bytes, bytes, int]] = []
+
+        def fake_renamex_np(temp: bytes, target: bytes, flags: int) -> int:
+            captured.append((temp, target, flags))
+            return 0
+
+        class _RecordingLibc:
+            def __getattr__(self, name: str):
+                if name == "renamex_np":
+                    return fake_renamex_np
+                raise AttributeError(name)
+
+        recording = _RecordingLibc()
+
+        with (
+            mock.patch.object(sys, "platform", "darwin"),
+            mock.patch.object(
+                posix_module.ctypes, "CDLL", lambda *a, **k: recording
+            ),
+        ):
+            temp = self._temp("temp-excl", b"X")
+            target = self.dir / "excl.fb2"
+            posix_module._rename_noreplace(temp, target)
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0][0], os.fsencode(temp))
+        self.assertEqual(captured[0][1], os.fsencode(target))
+        self.assertEqual(captured[0][2], 0x00000004)
 
     def test_posix_fallback_dispatch_real(self) -> None:
         """Отказ hardlink (симуляция ФС) — реальный renameat2/renamex_np.

@@ -505,8 +505,19 @@ class UnpackTests(unittest.TestCase):
         self.assertEqual(
             os.readlink(bundle / "_internal/keklib-cli"), "../keklib-cli"
         )
-        mode = (bundle / "keklib-cli").stat().st_mode
-        self.assertTrue(mode & stat.S_IXUSR, "executable должен быть исполняемым")
+        if os.name == "posix":
+            # Unix-бит исполнения — реальная гарантия ОС: unpacker ставит
+            # 0755 исполняемому. На Windows chmod не отражает execute-биты
+            # в st_mode (только read-only атрибут); фактическую
+            # исполняемость там доказывает запуск executable в
+            # FrozenSmokeTests, поэтому здесь проверяется регулярный файл.
+            mode = (bundle / "keklib-cli").stat().st_mode
+            self.assertTrue(mode & stat.S_IXUSR, "executable должен быть исполняемым")
+        else:
+            self.assertTrue(
+                (bundle / "keklib-cli").is_file(),
+                "executable должен быть регулярным файлом",
+            )
 
     def test_unpack_zip_ok(self):
         archive = self.base / "good.zip"
@@ -954,6 +965,24 @@ class WorkflowStructureTests(unittest.TestCase):
         tests = text.index("python -m unittest")
         self.assertLess(install, tests, "установка проекта обязательна до тестов")
         self.assertLess(entry, tests, "проверка entry point обязательна до тестов")
+
+    def test_ci_installs_test_tooling_lock_before_tests(self):
+        """Source CI обязан ставить test-tooling зависимости до unittest.
+
+        Тесты сборочного tooling (tests/test_packaging.py →
+        tools/build_portable.py:lock_pins) импортируют
+        ``packaging.requirements``; установка одного runtime-проекта этот
+        пакет в окружение job'а не ставит, и оба toolchain-теста падают
+        ModuleNotFoundError/PackagingError (первый CI, все 6 jobs).
+        Зависимость воспроизводима: отдельный lock-файл с теми же пинами и
+        хешами, что и requirements-build.lock.
+        """
+        text = self.CI.read_text(encoding="utf-8")
+        tooling = text.index("packaging/requirements-test-tooling.lock")
+        tests = text.index("python -m unittest")
+        self.assertLess(
+            tooling, tests, "test-tooling lock ставится до полного набора тестов"
+        )
 
     def test_portable_build_job_installs_project_before_build(self):
         """Build-job обязан устанавливать src-layout проект до сборки (F1).

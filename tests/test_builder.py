@@ -251,16 +251,22 @@ class BuilderRecipeTests(unittest.TestCase):
             self.assertIn(name.split("-")[0], str(ctx.exception).lower(), name)
 
     def test_bundle_run_source_readonly_and_explicit_output(self) -> None:
+        output = Path("/tmp/opencode/portable-out")
         argv = bic.podman_bundle_argv(
             self.pins,
             tag="builder:test",
             project_root=PROJECT_ROOT,
-            output_dir=Path("/tmp/opencode/portable-out"),
+            output_dir=output,
         )
         self.assertEqual(argv[:2], ["podman", "run"])
+        # Контракт argv — native Path/str: источник монтирования — точно
+        # str(Path) переданного каталога (на Windows это native-форма
+        # пути), цель и режим — фиксированные контейнерные имена. Одна
+        # POSIX-строка ожидала бы Linux-путь даже на Windows-хосте тестов.
+        mount_specs = [argv[i + 1] for i, item in enumerate(argv) if item == "-v"]
+        self.assertIn(f"{PROJECT_ROOT}:/src:ro", mount_specs)
+        self.assertIn(f"{output}:/out", mount_specs)
         joined = " ".join(argv)
-        self.assertIn(f"-v {PROJECT_ROOT}:/src:ro", joined)
-        self.assertIn("-v /tmp/opencode/portable-out:/out", joined)
         self.assertNotIn("--privileged", joined)
         self.assertNotIn(":/root", joined)
         self.assertNotIn(":/home", joined)

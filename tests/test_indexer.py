@@ -213,13 +213,19 @@ class IndexerTests(unittest.TestCase):
 
     # Вспомогательные методы: база и каталог кэша.
 
-    def _connect_ro(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(f"{self.paths.index.as_uri()}?mode=ro", uri=True)
-        self.addCleanup(conn.close)
-        return conn
-
     def _rows(self, sql: str) -> list[tuple]:
-        return self._connect_ro().execute(sql).fetchall()
+        """Строки индекса через короткоживущее read-only соединение.
+
+        Соединение закрывается сразу после fetchall: тест, прочитавший
+        индекс и затем пересобирающий его (os.replace старой базы), не
+        должен держать читатель — Windows отвергает замену открытого
+        файла WinError 5 (первый CI, test_add_edit_delete_del_and_inp).
+        """
+        conn = sqlite3.connect(f"{self.paths.index.as_uri()}?mode=ro", uri=True)
+        try:
+            return conn.execute(sql).fetchall()
+        finally:
+            conn.close()
 
     def _build_dirs(self) -> list[str]:
         if not self.cache.is_dir():

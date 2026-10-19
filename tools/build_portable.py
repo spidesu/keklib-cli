@@ -1210,7 +1210,10 @@ def _validate_bundle(bundle: Path, target: str, version: str) -> None:
         dirnames.sort()
         for name in sorted(dirnames + filenames):
             entry = current / name
-            rel = str(relative / name) if str(relative) != "." else name
+            # Диагностика — относительный POSIX-путь на любой ОС (как и
+            # контрактные идентификаторы инвентаря): на Windows native
+            # разделители не должны менять текст отказов.
+            rel = (relative / name).as_posix() if str(relative) != "." else name
             st = entry.lstat()
             if _link_like(st):
                 _require_contained_link(entry, bundle_real, rel)
@@ -1228,21 +1231,21 @@ def _validate_bundle(bundle: Path, target: str, version: str) -> None:
         for name in sorted(set(dirnames) & _FORBIDDEN_DIRS):
             violations.append(
                 f"запрещённый каталог {name}: "
-                f"{(current / name).relative_to(bundle)}"
+                f"{(current / name).relative_to(bundle).as_posix()}"
             )
         dirnames.sort()
         for name in sorted(filenames):
             if name.endswith(".zip") and name not in _ALLOWED_ZIPS:
                 violations.append(
                     f"посторонний ZIP (допустим только base_library.zip): "
-                    f"{(current / name).relative_to(bundle)}"
+                    f"{(current / name).relative_to(bundle).as_posix()}"
                 )
                 continue
             matched = [pattern for pattern in _FORBIDDEN_NAMES if fnmatch.fnmatch(name, pattern)]
             if matched:
                 violations.append(
                     f"запрещённый файл {matched[0]}: "
-                    f"{(current / name).relative_to(bundle)}"
+                    f"{(current / name).relative_to(bundle).as_posix()}"
                 )
     if violations:
         raise PackagingError("запрещённое содержимое комплекта:\n  " + "\n  ".join(violations))
@@ -1293,9 +1296,19 @@ def _write_tar(bundle: Path, destination: Path, executable: str) -> None:
                     st = os.lstat(path)
                     if _link_like(st):
                         resolved = path.resolve(strict=True)
+                        # Обе стороны relpath — в одной канонической системе
+                        # координат: resolved-цель И resolved-родитель. Путь
+                        # комплекта через symlink-предок (macOS /var →
+                        # /private/var, Windows short/long) прежде смешивал
+                        # resolved с lexical и выпускал хвост из «..» вместо
+                        # имени цели внутри комплекта. Разделители — POSIX и
+                        # на Windows: os.path.relpath там возвращает «\».
+                        parent = path.parent.resolve(strict=True)
                         item = tarfile.TarInfo(arcname)
                         item.type = tarfile.SYMTYPE
-                        item.linkname = os.path.relpath(resolved, path.parent)
+                        item.linkname = os.path.relpath(resolved, parent).replace(
+                            os.sep, "/"
+                        )
                         item.mode = 0o777
                         item.size = 0
                         item.uid = item.gid = 0

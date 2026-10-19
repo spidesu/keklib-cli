@@ -1,22 +1,27 @@
 """Фокусные тесты нативного TTY-harness (`tests.harness.tty`).
 
 Настоящие дочерние процессы в терминале: протокол приглашений (включая
-разрыв многобайтного символа UTF-8 между чтениями PTY), реальный код
-завершения, слитый transcript и таймаут. На POSIX исполняется PTY-ветка;
-на Windows те же сценарии идут через ConPTY (модуль ``winpty``
-дистрибутива ``pywinpty``) после установки
-``packaging/requirements-test-windows.lock`` — это будет нативная
-проверка, не mock. Статическая проверка имени импортируемого модуля ниже
-прямо помечена статической и нативной проверкой не является.
+разрыв маркера между чтениями терминала: на POSIX — внутри многобайтной
+UTF-8 кодовой точки байтового PTY-канала, на Windows — по границе
+символов Unicode-канала ConPTY), реальный код завершения, слитый
+transcript и таймаут. На POSIX исполняется PTY-ветка; на Windows те же
+сценарии идут через ConPTY (модуль ``winpty`` дистрибутива ``pywinpty``)
+после установки ``packaging/requirements-test-windows.lock`` — это будет
+нативная проверка, не mock. Статическая проверка имени импортируемого
+модуля ниже прямо помечена статической и нативной проверкой не является.
 
 Отдельный класс — синтетические регрессии cleanup-семантики pinned
 ``winpty`` (v3.1.0, Python-часть) на настоящих локальных
 socket-дескрипторах: это воспроизведение точной логики upstream-модуля, а
 НЕ нативный ConPTY-прогон (нативная Windows-проверка — задача 12).
+Исход пробуждения blocked-recv различается между ОС (EOF либо ошибка
+закрытого дескриптора EBADF/WSAENOTSOCK) — контракт тестов описывает
+оба легитимных исхода, не считая ``b""`` единственно верным.
 """
 
 from __future__ import annotations
 
+import errno
 import os
 import socket
 import sys
@@ -34,16 +39,34 @@ from tests.harness.tty import (
     run_tty,
 )
 
-#: Первый байт многобайтного символа маркера пишется отдельно от остатка:
-#: воспроизводит разрыв UTF-8 кодовой точки между чтениями PTY.
+#: Первый фрагмент маркера пишется отдельно от остатка — воспроизводит
+#: разрыв маркера между чтениями терминала. На POSIX PTY — байтовый
+#: канал: разрыв идёт ВНУТРИ многобайтной UTF-8 кодовой точки и проверяет
+#: инкрементный декодер harness. На Windows ConPTY — Unicode-канал
+#: (WriteConsoleW; pywinpty сам дособирает UTF-8 в read()): байтовый
+#: разрыв внутри кодовой точки через консоль не переносится вовсе —
+#: _WindowsConsoleIO конвертирует байты через MultiByteToWideChar и
+#: молча теряет неполные последовательности, маркер не собирается и
+#: child зависает в readline (TtyTimeout первого CI). Поэтому на Windows
+#: разрыв идёт по границе символа между двумя отдельными записями в
+#: консоль — это нативный сценарий Unicode-приглашения: приглашение
+#: приходит порциями, harness обязан собрать его в transcript.
 _CHILD_SPLIT_MARKER = r"""
 import sys, time
-marker = sys.argv[1].encode("utf-8")
-sys.stdout.buffer.write(marker[:1])
-sys.stdout.flush()
-time.sleep(0.15)
-sys.stdout.buffer.write(marker[1:])
-sys.stdout.flush()
+if sys.platform == "win32":
+    marker = sys.argv[1]
+    sys.stdout.write(marker[:1])
+    sys.stdout.flush()
+    time.sleep(0.15)
+    sys.stdout.write(marker[1:])
+    sys.stdout.flush()
+else:
+    raw = sys.argv[1].encode("utf-8")
+    sys.stdout.buffer.write(raw[:1])
+    sys.stdout.flush()
+    time.sleep(0.15)
+    sys.stdout.buffer.write(raw[1:])
+    sys.stdout.flush()
 answer = sys.stdin.readline()
 sys.stdout.write("ECHO:" + answer.strip() + "\n")
 sys.stdout.flush()
@@ -100,11 +123,15 @@ class TtyHarnessTests(unittest.TestCase):
         self.assertIn("ERR-LINE", result.stdout)
 
     def test_prompt_split_inside_character(self):
-        """Разрыв многобайтного символа маркера между чтениями PTY.
+        """Разрыв маркера между порциями вывода терминала.
 
-        Первый байт «в» маркера приходит отдельным чтением; независимый
-        decode каждого чанка необратимо портил бы кодовую точку, и приглашение
-        никогда не совпало бы — harness обязан дочитывать символ целиком.
+        POSIX: первый байт «в» приходит отдельным чтением PTY;
+        независимый decode каждого чанка необратимо портил бы кодовую
+        точку, и приглашение никогда не совпало бы — harness обязан
+        дочитывать символ целиком. Windows: приглашение приходит
+        порциями по границе символов (Unicode-канал ConPTY; байтовый
+        разрыв внутри кодовой точки через консоль непереносим — см.
+        докстринг _CHILD_SPLIT_MARKER) — harness обязан собрать его.
         """
         result = self._run(
             _CHILD_SPLIT_MARKER, ["GO"], argv=(DEFAULT_PROMPT_MARKER, "GO")
@@ -258,13 +285,28 @@ class WindowsShutdownSyntheticTests(unittest.TestCase):
         self.assertEqual(self._fds(process), (-1, -1))
 
     def test_socket_shutdown_wakes_blocked_reader(self):
-        """shutdown сокета будит поток, заблокированный в recv, до close."""
+        """shutdown/close сокета будит поток, заблокированный в recv.
+
+        Исход recv различается между ОС и версиями Python: чистый EOF
+        (``b""``) — когда shutdown успевает разбудить блокированный recv
+        до close; либо OSError с закрытого дескриптора, когда close
+        выполняется раньше завершения syscall — EBADF (macOS/Py3.14) или
+        WSAENOTSOCK == errno.ENOTSOCK на Windows (WinError 10038 первого
+        CI). И то и другое доказывает главное: reader завершён, а не
+        завис, и дескрипторы закрыты. Произвольные исключения (не из
+        закрытого сокета) тест по-прежнему не пропускает.
+        """
         process = self._process(alive=False)
         process.isalive()
-        received: list[bytes] = []
-        reader = threading.Thread(
-            target=lambda: received.append(process.fileobj.recv(16)), daemon=True
-        )
+        outcome: list[object] = []
+
+        def _blocked_recv() -> None:
+            try:
+                outcome.append(process.fileobj.recv(16))
+            except OSError as exc:
+                outcome.append(exc)
+
+        reader = threading.Thread(target=_blocked_recv, daemon=True)
         reader.start()
         time.sleep(0.15)  # дать потоку заблокироваться в recv на реальном сокете
 
@@ -272,9 +314,19 @@ class WindowsShutdownSyntheticTests(unittest.TestCase):
         reader.join(timeout=2.0)
 
         self.assertIsNone(failure)
-        self.assertFalse(reader.is_alive())
-        self.assertEqual(received, [b""])
+        self.assertFalse(reader.is_alive(), "reader не завершён после shutdown/close")
         self.assertEqual(self._fds(process), (-1, -1))
+        self.assertEqual(len(outcome), 1, "reader должен завершиться одним исходом")
+        result = outcome[0]
+        if isinstance(result, bytes):
+            self.assertEqual(result, b"", "данные из закрытого сокета не ожидались")
+        else:
+            self.assertIsInstance(result, OSError)
+            self.assertIn(
+                result.errno,
+                (errno.EBADF, errno.ENOTSOCK),
+                f"посторонняя ошибка reader: {result!r}",
+            )
 
     def test_terminate_exception_still_closes_sockets(self):
         """Исключение из terminate/провал — диагностика, но ВСЕ ресурсы закрыты."""
