@@ -2409,11 +2409,12 @@ class DeliveryDocsSafetyTests(unittest.TestCase):
     """Обязательные честные формулировки пользовательских docs поставки.
 
     README/INSTALL/BUILD/THIRD_PARTY_NOTICES копируются в комплекты
-    (кроме BUILD.md), поэтому их статус доступности обязан соответств
-    фактической per-target приёмке: черновики Release не выдаются за
-    публичную поставку, клиентские Windows/macOS не обещаются нативными
-    baseline-прогонами серверных/актуальных сборочных ОС, а команды
-    проверки сумм даются для каждой ОС поставки.
+    (кроме BUILD.md), поэтому их статус доступности обязан
+    соответствовать опубликованной поставке: публичный prerelease
+    описывается доступным и без вводящих в заблуждение отрицаний
+    («публичного релиза нет»), клиентские Windows/macOS не обещаются
+    нативными baseline-прогонами серверных/актуальных сборочных ОС,
+    а команды проверки сумм даются для каждой ОС поставки.
     """
 
     @staticmethod
@@ -2433,14 +2434,41 @@ class DeliveryDocsSafetyTests(unittest.TestCase):
             for claim in ("Windows 10", "Windows 11"):
                 self.assertNotIn(claim, self._doc(name), f"{name}: {claim}")
 
-    def test_docs_state_no_public_release_yet(self) -> None:
-        """Черновики не являются публичной поставкой; публичного релиза нет."""
+    def test_docs_state_public_prerelease_available(self) -> None:
+        """Публичный prerelease v0.1.0 описан доступным; старых отрицаний нет.
+
+        Прежняя формулировка «Публичного готового релиза пока нет»
+        противоречила факту публикации prerelease v0.1.0 (review D1):
+        вводные фразы README/INSTALL не должны отрицать доступность
+        публичной поставки. Прямые ссылки загрузки всех четырёх архивов
+        выпуска обязательны; Source code zip/tar.gz остаются отчётливо
+        отделёнными от portable-архивов.
+        """
         readme = self._doc("README.md")
         install = self._doc("INSTALL.md")
-        self.assertIn("Публичного готового релиза пока нет", readme)
-        self.assertIn("Публичного готового portable-релиза пока нет", install)
-        self.assertIn("не подписаны сертификатом", readme)
+        # Устаревшие отрицания доступности удалены из пользовательских docs.
+        self.assertNotIn("Публичного готового релиза пока нет", readme)
+        self.assertNotIn(
+            "Публичного готового portable-релиза пока нет", install
+        )
+        # Публичный prerelease v0.1.0 описан как доступный в обоих docs.
+        tag_url = "https://github.com/spidesu/keklib-cli/releases/tag/v0.1.0"
+        for text in (readme, install):
+            self.assertIn(tag_url, text)
+            self.assertIn("prerelease", text)
+            self.assertIn("SHA256SUMS", text)
+        # Прямые ссылки загрузки всех четырёх архивов выпуска v0.1.0.
+        for target in FOUR_TARGETS:
+            extension = "zip" if target == "windows-x86_64" else "tar.gz"
+            self.assertIn(
+                "(https://github.com/spidesu/keklib-cli/releases/download"
+                f"/v0.1.0/keklib-cli-0.1.0-{target}.{extension})",
+                install,
+            )
+        # Source code zip/tar.gz отделены от portable-поставки; подписи нет.
+        self.assertIn("Source code", readme)
         self.assertIn("не являются публичной поставкой", readme)
+        self.assertIn("не подписаны сертификатом", readme)
 
     def test_readme_lists_all_four_targets_with_baselines(self) -> None:
         """Доступность описана для всех четырёх target с их baseline."""
